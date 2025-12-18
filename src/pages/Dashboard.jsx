@@ -34,17 +34,20 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
   const [sending, setSending] = useState(false)
-  const [isRemoteTyping, setIsRemoteTyping] = useState(false) // Est-ce que l'autre écrit ?
+  const [isRemoteTyping, setIsRemoteTyping] = useState(false)
+  
+  // --- ÉTATS POUR L'ÉDITION ---
+  const [editingId, setEditingId] = useState(null) // ID du message en cours de modif
+  const [editText, setEditText] = useState('')     // Texte en cours de modif
   
   const messagesEndRef = useRef(null)
-  const channelRef = useRef(null) // Pour garder la connexion ouverte
-  const typingTimeoutRef = useRef(null) // Pour arrêter l'animation si ça s'arrête
+  const channelRef = useRef(null)
+  const typingTimeoutRef = useRef(null)
 
-  // 1. CHARGEMENT INITIAL + TEMPS RÉEL
+  // 1. CHARGEMENT INITIAL + TEMPS RÉEL (AMÉLIORÉ)
   useEffect(() => {
     if (!connection?.id) return
 
-    // A. Charger l'historique
     const fetchMessages = async () => {
       const { data } = await supabase
         .from('messages')
@@ -55,80 +58,104 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     }
     fetchMessages()
 
-    // B. Mettre en place le canal Temps Réel (Supabase Realtime)
-    // On crée un canal unique pour cette conversation
     channelRef.current = supabase.channel(`room:${connection.id}`)
 
     channelRef.current
-      // 1. Écouter les nouveaux messages (INSERT dans la DB)
+      // ON ÉCOUTE TOUS LES ÉVÉNEMENTS (*)
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*', // INSERT, UPDATE, DELETE
           schema: 'public',
           table: 'messages',
           filter: `connection_id=eq.${connection.id}`
         },
         (payload) => {
-          // On ajoute le message seulement si on ne l'a pas déjà (pour éviter les doublons avec l'ajout optimiste)
-          setMessages((current) => {
-            const exists = current.find(m => m.id === payload.new.id)
-            if (exists) return current
-            return [...current, payload.new]
-          })
-          // Si on reçoit un message, l'autre a fini d'écrire
-          setIsRemoteTyping(false)
+          // CAS 1 : NOUVEAU MESSAGE
+          if (payload.eventType === 'INSERT') {
+            setMessages((current) => {
+              if (current.find(m => m.id === payload.new.id)) return current
+              return [...current, payload.new]
+            })
+            setIsRemoteTyping(false)
+          } 
+          // CAS 2 : MODIFICATION
+          else if (payload.eventType === 'UPDATE') {
+            setMessages((current) => 
+              current.map(m => m.id === payload.new.id ? payload.new : m)
+            )
+          }
+          // CAS 3 : SUPPRESSION
+          else if (payload.eventType === 'DELETE') {
+            setMessages((current) => 
+              current.filter(m => m.id !== payload.old.id)
+            )
+          }
         }
       )
-      // 2. Écouter le signal "Typing..." (Broadcast éphémère)
       .on('broadcast', { event: 'typing' }, (payload) => {
-        // On vérifie que ce n'est pas moi qui écris (au cas où)
         if (payload.userId !== currentUser.id) {
           setIsRemoteTyping(true)
-          
-          // On efface les points après 3 secondes sans nouveau signal
           clearTimeout(typingTimeoutRef.current)
-          typingTimeoutRef.current = setTimeout(() => {
-            setIsRemoteTyping(false)
-          }, 3000)
+          typingTimeoutRef.current = setTimeout(() => setIsRemoteTyping(false), 3000)
         }
       })
       .subscribe()
 
-    // Nettoyage quand on quitte le chat
-    return () => {
-      supabase.removeChannel(channelRef.current)
-    }
+    return () => { supabase.removeChannel(channelRef.current) }
   }, [connection, currentUser.id])
 
-  // Scroll auto vers le bas
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, isRemoteTyping]) // On scroll aussi quand "..." apparait
+    // On ne scroll en bas que si on n'est pas en train d'éditer un vieux message
+    if (!editingId) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    }
+  }, [messages, isRemoteTyping, editingId])
 
-  // Fonction pour dire "J'écris..."
+  // --- ACTIONS UTILISATEUR ---
+
+  const handleDelete = async (msgId) => {
+    if (window.confirm("Supprimer ce message ?")) {
+      await supabase.from('messages').delete().eq('id', msgId)
+    }
+  }
+
+  const startEdit = (msg) => {
+    setEditingId(msg.id)
+    setEditText(msg.content)
+  }
+
+  const cancelEdit = () => {
+    setEditingId(null)
+    setEditText('')
+  }
+
+  const saveEdit = async () => {
+    if (!editText.trim()) return handleDelete(editingId) // Vide = Supprimer ? Ou empêcher.
+    
+    await supabase
+      .from('messages')
+      .update({ content: editText })
+      .eq('id', editingId)
+    
+    setEditingId(null)
+    setEditText('')
+  }
+
+  // ... (Garde handleTyping, sendMessage, calculateTimeLeft tels quels)
   const handleTyping = (e) => {
     setInputText(e.target.value)
-
     if (connection?.id && channelRef.current) {
-      // On envoie un signal léger aux autres abonnés du canal
-      channelRef.current.send({
-        type: 'broadcast',
-        event: 'typing',
-        payload: { userId: currentUser.id }
-      })
+      channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUser.id } })
     }
   }
 
   const sendMessage = async (e) => {
     e.preventDefault()
     if (!inputText.trim()) return
-
     const text = inputText
-    setInputText('') // Clear immédiat
-    // On arrête d'envoyer le signal typing (optionnel, le timeout gérera)
+    setInputText('')
     
-    // Logique d'envoi (inchangée)
     try {
       let currentConn = connection
       if (!currentConn) {
@@ -140,23 +167,15 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
           content: text
         })
       }
-    } catch (error) {
-      console.error("Erreur envoi:", error)
-    }
+    } catch (error) { console.error(error) }
   }
 
-  // (Fonction calculateTimeLeft inchangée...)
   const calculateTimeLeft = () => {
     if (!connection) return "24h 00m"
     if (connection.status === 'accepted') return "Illimité"
-    const created = new Date(connection.created_at)
-    const expire = new Date(created.getTime() + 24 * 60 * 60 * 1000)
-    const now = new Date()
-    const diff = expire - now
+    const diff = new Date(connection.created_at).getTime() + 24 * 3600 * 1000 - new Date().getTime()
     if (diff <= 0) return "Expiré"
-    const h = Math.floor(diff / (1000 * 60 * 60))
-    const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-    return `${h}h ${m}m`
+    return `${Math.floor(diff / 3600000)}h ${Math.floor((diff % 3600000) / 60000)}m`
   }
 
   return (
@@ -169,8 +188,7 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
         <div className="flex-1">
           <h3 className="font-bold text-white">{targetUser.pseudo}</h3>
           <div className="flex items-center gap-1 text-xs text-yellow-400 font-mono">
-            <Clock size={12} />
-            {calculateTimeLeft()} avant disparition
+            <Clock size={12} /> {calculateTimeLeft()}
           </div>
         </div>
       </div>
@@ -178,50 +196,77 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
       {/* MESSAGES */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/20">
         {messages.length === 0 && (
-          <div className="text-center text-gray-500 text-sm mt-10 p-4">
-            <p>C'est le début d'un nouveau lien. ✨</p>
-          </div>
+          <div className="text-center text-gray-500 text-sm mt-10 p-4">C'est le début d'un nouveau lien. ✨</div>
         )}
 
         {messages.map((msg) => {
           const isMe = msg.sender_id === currentUser.id
+          const isEditing = editingId === msg.id
+
           return (
-            <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${
-                isMe 
-                  ? 'bg-philo-primary text-white rounded-tr-none' 
-                  : 'bg-white/10 text-gray-200 rounded-tl-none'
-              }`}>
-                {msg.content}
+            <div key={msg.id} className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+              
+              {/* BULLE DE MESSAGE */}
+              <div className={`max-w-[85%] relative ${isEditing ? 'w-full' : ''}`}>
+                
+                {isEditing ? (
+                  // MODE ÉDITION
+                  <div className="flex gap-2 w-full">
+                    <input 
+                      autoFocus
+                      type="text" 
+                      value={editText} 
+                      onChange={(e) => setEditText(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+                      className="flex-1 bg-black/50 border border-philo-primary rounded-xl px-3 py-2 text-sm text-white outline-none"
+                    />
+                    <button onClick={saveEdit} className="p-2 bg-green-500/20 text-green-400 rounded-full hover:bg-green-500/40"><Check size={14}/></button>
+                    <button onClick={cancelEdit} className="p-2 bg-red-500/20 text-red-400 rounded-full hover:bg-red-500/40"><X size={14}/></button>
+                  </div>
+                ) : (
+                  // MODE AFFICHAGE NORMAL
+                  <div className={`p-3 rounded-2xl text-sm break-words relative ${
+                    isMe 
+                      ? 'bg-philo-primary text-white rounded-tr-none' 
+                      : 'bg-white/10 text-gray-200 rounded-tl-none'
+                  }`}>
+                    {msg.content}
+                    
+                    {/* Indicateur "Modifié" */}
+                    {/* Tu peux ajouter une colonne updated_at plus tard pour afficher "modifié" */}
+                  </div>
+                )}
+
+                {/* OUTILS (Crayon / Poubelle) - Apparaissent au survol, uniquement pour moi */}
+                {isMe && !isEditing && (
+                  <div className="absolute top-0 -left-16 h-full flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity px-2">
+                    <button onClick={() => startEdit(msg)} className="p-1.5 bg-slate-800 text-gray-400 hover:text-white rounded-full hover:bg-white/10" title="Modifier">
+                      <Pencil size={12} />
+                    </button>
+                    <button onClick={() => handleDelete(msg.id)} className="p-1.5 bg-slate-800 text-red-400 hover:text-red-300 rounded-full hover:bg-red-900/30" title="Supprimer">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           )
         })}
 
-        {/* INDICATEUR DE FRAPPE (Apparaît si l'autre écrit) */}
-        {isRemoteTyping && (
-          <div className="flex justify-start">
-            <TypingIndicator />
-          </div>
-        )}
-
+        {isRemoteTyping && <div className="flex justify-start"><TypingIndicator /></div>}
         <div ref={messagesEndRef} />
       </div>
 
-      {/* INPUT */}
+      {/* INPUT (Caché si on édite un message pour éviter la confusion ?) Non, on laisse. */}
       <form onSubmit={sendMessage} className="p-3 bg-slate-800 border-t border-white/10 flex gap-2">
         <input
           type="text"
           value={inputText}
-          onChange={handleTyping} // <-- On a changé onChange ici
+          onChange={handleTyping}
           placeholder="Ton message..."
           className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none"
         />
-        <button 
-          disabled={!inputText.trim()}
-          type="submit" 
-          className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50"
-        >
+        <button disabled={!inputText.trim()} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50">
           <Send size={18} />
         </button>
       </form>
