@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
-import { User, MessageCircle, LogOut, UserCircle, X, BrainCircuit, Sparkles, Send, ArrowLeft, Clock, Lock, CheckCircle } from 'lucide-react'
+import {User,MessageCircle,LogOut,UserCircle,X,BrainCircuit,Sparkles,Send,ArrowLeft,Clock,Lock,CheckCircle,Pencil,Trash2,Check} from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 // Ajoute useRef dans les imports si ce n'est pas déjà fait
