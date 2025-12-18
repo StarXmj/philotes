@@ -1,219 +1,394 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
-import { User, MessageCircle, LogOut, UserCircle, X, BrainCircuit, Sparkles } from 'lucide-react'
+import { User, MessageCircle, LogOut, UserCircle, X, BrainCircuit, Sparkles, Send, ArrowLeft, Clock, Lock, CheckCircle } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
-// --- 1. LE COMPOSANT SIDEBAR (Détails du profil) ---
+// --- COMPOSANT : CHAT INTERFACE (Style WhatsApp/Telegram) ---
+const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateConnection }) => {
+  const [messages, setMessages] = useState([])
+  const [inputText, setInputText] = useState('')
+  const [sending, setSending] = useState(false)
+  const messagesEndRef = useRef(null)
+
+  // Chargement des messages
+  useEffect(() => {
+    if (connection?.id) {
+      const fetchMessages = async () => {
+        const { data } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('connection_id', connection.id)
+          .order('created_at', { ascending: true })
+        setMessages(data || [])
+      }
+      fetchMessages()
+
+      // (Optionnel) Ici on pourrait ajouter un supabase.channel pour le temps réel
+    }
+  }, [connection])
+
+  // Scroll automatique vers le bas
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages])
+
+  // Calcul du temps restant (Compte à rebours)
+  const calculateTimeLeft = () => {
+    if (!connection) return "24h 00m" // Nouveau chat
+    if (connection.status === 'accepted') return "Illimité" // Chat validé
+    
+    const created = new Date(connection.created_at)
+    const expire = new Date(created.getTime() + 24 * 60 * 60 * 1000)
+    const now = new Date()
+    const diff = expire - now
+    
+    if (diff <= 0) return "Expiré"
+    
+    const h = Math.floor(diff / (1000 * 60 * 60))
+    const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+    return `${h}h ${m}m`
+  }
+
+  const sendMessage = async (e) => {
+    e.preventDefault()
+    if (!inputText.trim()) return
+
+    setSending(true)
+    const text = inputText
+    setInputText('') // Optimistic clear
+
+    try {
+      let currentConn = connection
+
+      // 1. Si pas de connexion, on la crée (Premier message)
+      if (!currentConn) {
+        currentConn = await onCreateConnection(text) // Fonction passée par le parent
+      } else {
+        // 2. Sinon on ajoute le message
+        await supabase.from('messages').insert({
+          connection_id: currentConn.id,
+          sender_id: currentUser.id,
+          content: text
+        })
+      }
+
+      // Mise à jour locale (simulée pour la fluidité)
+      setMessages(prev => [...prev, {
+        id: 'temp-' + Date.now(),
+        sender_id: currentUser.id,
+        content: text,
+        created_at: new Date().toISOString()
+      }])
+
+    } catch (error) {
+      console.error("Erreur envoi:", error)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full bg-slate-900">
+      {/* HEADER CHAT */}
+      <div className="flex items-center gap-3 p-4 bg-slate-800 border-b border-white/10 shadow-md z-10">
+        <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition text-gray-300">
+          <ArrowLeft size={20} />
+        </button>
+        
+        <div className="flex-1">
+          <h3 className="font-bold text-white">{targetUser.pseudo}</h3>
+          <div className="flex items-center gap-1 text-xs text-yellow-400 font-mono">
+            <Clock size={12} />
+            {calculateTimeLeft()} avant disparition
+          </div>
+        </div>
+      </div>
+
+      {/* ZONE MESSAGES */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/20">
+        {messages.length === 0 && (
+          <div className="text-center text-gray-500 text-sm mt-10 p-4">
+            <p>C'est le début d'un nouveau lien. ✨</p>
+            <p className="text-xs mt-1">Écris un message pour activer le compte à rebours de 24h.</p>
+          </div>
+        )}
+
+        {messages.map((msg) => {
+          const isMe = msg.sender_id === currentUser.id
+          return (
+            <div key={msg.id} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[80%] p-3 rounded-2xl text-sm ${
+                isMe 
+                  ? 'bg-philo-primary text-white rounded-tr-none' 
+                  : 'bg-white/10 text-gray-200 rounded-tl-none'
+              }`}>
+                {msg.content}
+              </div>
+            </div>
+          )
+        })}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* INPUT ZONE */}
+      <form onSubmit={sendMessage} className="p-3 bg-slate-800 border-t border-white/10 flex gap-2">
+        <input
+          type="text"
+          value={inputText}
+          onChange={e => setInputText(e.target.value)}
+          placeholder="Ton message..."
+          className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none"
+        />
+        <button 
+          disabled={sending || !inputText.trim()}
+          type="submit" 
+          className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50"
+        >
+          <Send size={18} />
+        </button>
+      </form>
+    </div>
+  )
+}
+
+
+// --- SIDEBAR INTELLIGENTE (Gère Profil OU Chat) ---
 const UserProfileSidebar = ({ userId, onClose, similarity }) => {
+  const [view, setView] = useState('PROFILE') // 'PROFILE' ou 'CHAT'
   const [profile, setProfile] = useState(null)
   const [answers, setAnswers] = useState([])
+  const [connection, setConnection] = useState(null)
+  const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const fetchUserDetails = async () => {
+    const init = async () => {
       setLoading(true)
-      
-      // A. Récupérer le pseudo (On masque intentionnellement le reste)
-      const { data: prof } = await supabase
-        .from('profiles')
-        .select('pseudo, id') 
-        .eq('id', userId)
-        .single()
-      
+      const { data: { user } } = await supabase.auth.getUser()
+      setCurrentUser(user)
+
+      // 1. Profil Cible
+      const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).single()
       setProfile(prof)
 
-      // B. Récupérer les Réponses au Quiz (La "Vibe")
-      const { data: ans } = await supabase
-        .from('user_answers')
-        .select(`
-          question_id,
-          questions ( text ),
-          options ( text )
-        `)
-        .eq('user_id', userId)
+      // 2. Vibe
+      const { data: ans } = await supabase.from('user_answers').select('question_id, questions(text), options(text)').eq('user_id', userId)
+      setAnswers(ans || [])
 
-      if (ans) setAnswers(ans)
+      // 3. Connexion existante ?
+      const { data: conn } = await supabase
+        .from('connections')
+        .select('*')
+        .or(`and(sender_id.eq.${user.id},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${user.id})`)
+        .maybeSingle()
+      
+      setConnection(conn)
       setLoading(false)
     }
-
-    if (userId) fetchUserDetails()
+    if (userId) init()
   }, [userId])
+
+  // Création de la connexion lors du premier message
+  const handleCreateConnection = async (firstMessage) => {
+    // 1. Créer la connexion
+    const { data: newConn, error: connError } = await supabase
+      .from('connections')
+      .insert({
+        sender_id: currentUser.id,
+        receiver_id: userId,
+        status: 'pending' // En attente d'acceptation
+      })
+      .select()
+      .single()
+
+    if (connError) throw connError
+
+    // 2. Insérer le premier message dans la table messages
+    await supabase.from('messages').insert({
+      connection_id: newConn.id,
+      sender_id: currentUser.id,
+      content: firstMessage
+    })
+
+    setConnection(newConn)
+    return newConn
+  }
+
+  // Accepter la demande
+  const handleAccept = async () => {
+    const { data } = await supabase.from('connections').update({ status: 'accepted' }).eq('id', connection.id).select().single()
+    setConnection(data)
+  }
+
+  const isAccepted = connection?.status === 'accepted'
+  const isReceiver = connection?.receiver_id === currentUser?.id
 
   return (
     <motion.div
-      initial={{ x: "100%" }}
-      animate={{ x: 0 }}
-      exit={{ x: "100%" }}
+      initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
       transition={{ type: "spring", damping: 25, stiffness: 200 }}
-      className="fixed inset-y-0 right-0 w-full md:w-96 bg-slate-900/95 backdrop-blur-xl border-l border-white/10 shadow-2xl z-50 overflow-y-auto"
+      className="fixed inset-y-0 right-0 w-full md:w-96 bg-slate-900/95 backdrop-blur-xl border-l border-white/10 shadow-2xl z-50 overflow-hidden flex flex-col"
     >
-      {/* Header Sidebar */}
-      <div className="sticky top-0 bg-slate-900/90 backdrop-blur-md border-b border-white/10 p-4 flex justify-between items-center z-10">
-        <h2 className="text-xl font-bold text-white flex items-center gap-2">
-          <BrainCircuit className="text-philo-primary" /> 
-          Analyse Vibe
-        </h2>
-        <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition">
-          <X size={24} />
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="p-8 text-center text-gray-400">Décryptage du profil...</div>
+      {/* --- VUE CHAT --- */}
+      {view === 'CHAT' ? (
+        <ChatInterface 
+          currentUser={currentUser} 
+          targetUser={profile} 
+          connection={connection}
+          onBack={() => setView('PROFILE')} // Retour au profil
+          onCreateConnection={handleCreateConnection}
+        />
       ) : (
-        <div className="p-6 space-y-8">
-          
-          {/* PSEUDO & MATCH */}
-          <div className="text-center">
-            <div className="w-20 h-20 bg-gradient-to-br from-philo-primary to-philo-secondary rounded-full mx-auto flex items-center justify-center mb-3 shadow-lg shadow-purple-500/20">
-              <span className="text-3xl font-bold text-white">{profile?.pseudo?.substring(0,2).toUpperCase()}</span>
-            </div>
-            <h3 className="text-2xl font-bold text-white">{profile?.pseudo}</h3>
-            
-            {/* Badge de compatibilité */}
-            <div className="mt-2 inline-flex items-center gap-1 bg-green-500/20 text-green-400 px-3 py-1 rounded-full text-sm font-bold border border-green-500/30">
-              <Sparkles size={14}/> {Math.round(similarity * 100)}% Compatible
-            </div>
+        
+        /* --- VUE PROFIL --- */
+        <div className="flex flex-col h-full overflow-y-auto">
+          {/* Header Profil */}
+          <div className="sticky top-0 bg-slate-900/90 backdrop-blur-md border-b border-white/10 p-4 flex justify-between items-center z-10">
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <BrainCircuit className="text-philo-primary" /> Vibe Check
+            </h2>
+            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition"><X size={24} /></button>
           </div>
 
-          <div className="h-px bg-white/10 w-full" />
+          {loading ? (
+            <div className="p-8 text-center text-gray-400">Scan en cours...</div>
+          ) : (
+            <div className="p-6 space-y-8 pb-20">
+              
+              {/* IDENTITÉ */}
+              <div className="text-center relative">
+                <div className="w-24 h-24 bg-gradient-to-br from-philo-primary to-philo-secondary rounded-full mx-auto flex items-center justify-center mb-3 shadow-lg shadow-purple-500/20">
+                  <span className="text-4xl font-bold text-white">{profile?.pseudo?.substring(0,2).toUpperCase()}</span>
+                </div>
+                <h3 className="text-2xl font-bold text-white">{profile?.pseudo}</h3>
+                
+                <div className="mt-2 inline-flex items-center gap-1 bg-green-500/20 text-green-400 px-3 py-1 rounded-full text-xs font-bold border border-green-500/30">
+                  <Sparkles size={12}/> {Math.round(similarity * 100)}% Compatible
+                </div>
 
-          {/* LISTE DES QUESTIONS / RÉPONSES */}
-          <div className="space-y-4">
-            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Sa personnalité</h4>
-            
-            {answers.length > 0 ? (
-              answers.map((item, idx) => (
-                <motion.div 
-                  key={idx}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: idx * 0.05 }}
-                  className="bg-white/5 p-3 rounded-xl border border-white/5 hover:border-philo-primary/30 transition-colors"
-                >
-                  <p className="text-[10px] text-philo-secondary uppercase font-bold mb-1">
-                    {item.questions?.text}
-                  </p>
-                  <p className="text-gray-200 text-sm font-medium">
-                    {item.options?.text}
-                  </p>
-                </motion.div>
-              ))
-            ) : (
-              <p className="text-gray-500 italic text-center text-sm">Ce profil n'a pas encore répondu au quiz détaillé.</p>
-            )}
-          </div>
+                {/* INFOS FLOUTÉES */}
+                <div className="mt-6 grid grid-cols-2 gap-2 text-sm">
+                  <div className={`p-3 rounded-xl border border-white/5 ${isAccepted ? 'bg-white/5' : 'bg-black/40 blur-sm select-none'}`}>
+                    <span className="block text-gray-500 text-[10px] uppercase">Campus</span>
+                    {isAccepted ? profile?.etudes_lieu : "???"}
+                  </div>
+                  <div className={`p-3 rounded-xl border border-white/5 ${isAccepted ? 'bg-white/5' : 'bg-black/40 blur-sm select-none'}`}>
+                    <span className="block text-gray-500 text-[10px] uppercase">Filière</span>
+                    {isAccepted ? profile?.intitule : "???"}
+                  </div>
+                  <div className={`p-3 rounded-xl border border-white/5 ${isAccepted ? 'bg-white/5' : 'bg-black/40 blur-sm select-none'}`}>
+                    <span className="block text-gray-500 text-[10px] uppercase">Genre</span>
+                    {isAccepted ? profile?.sexe : "???"}
+                  </div>
+                  <div className={`p-3 rounded-xl border border-white/5 ${isAccepted ? 'bg-white/5' : 'bg-black/40 blur-sm select-none'}`}>
+                    <span className="block text-gray-500 text-[10px] uppercase">Age</span>
+                    {isAccepted ? "Dévoilé" : "???"} 
+                  </div>
+                </div>
+                
+                {!isAccepted && (
+                  <div className="absolute top-40 left-0 w-full flex justify-center">
+                    <span className="bg-black/80 text-white px-3 py-1 rounded-full text-xs flex items-center gap-1 border border-white/20">
+                      <Lock size={12}/> Créer un lien pour voir
+                    </span>
+                  </div>
+                )}
+              </div>
 
-          {/* ACTIONS */}
-          <button className="w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-gray-200 transition flex items-center justify-center gap-2 mt-8">
-            <MessageCircle size={20} />
-            Envoyer un message
-          </button>
+              <div className="h-px bg-white/10 w-full" />
 
+              {/* LA VIBE */}
+              <div className="space-y-4">
+                <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Sa personnalité</h4>
+                {answers.map((item, idx) => (
+                  <motion.div key={idx} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.05 }} className="bg-white/5 p-3 rounded-xl border border-white/5">
+                    <p className="text-[10px] text-philo-secondary uppercase font-bold mb-1">{item.questions?.text}</p>
+                    <p className="text-gray-200 text-sm font-medium">{item.options?.text}</p>
+                  </motion.div>
+                ))}
+              </div>
+
+              {/* BARRE D'ACTION (FIXE EN BAS) */}
+              <div className="fixed bottom-0 right-0 w-full md:w-96 p-4 bg-slate-900 border-t border-white/10 backdrop-blur-xl">
+                {connection && !isAccepted && isReceiver ? (
+                  // CAS : Demande reçue
+                  <button onClick={handleAccept} className="w-full py-3 bg-green-500 hover:bg-green-600 rounded-xl text-black font-bold flex items-center justify-center gap-2 shadow-lg shadow-green-500/20">
+                    <CheckCircle size={20} /> Accepter le lien ({profile?.pseudo})
+                  </button>
+                ) : (
+                  // CAS : Pas de lien ou déjà accepté ou envoyé par moi
+                  <button 
+                    onClick={() => setView('CHAT')}
+                    className="w-full py-3 bg-gradient-to-r from-philo-primary to-philo-secondary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20"
+                  >
+                    <MessageCircle size={20} />
+                    {connection ? "Ouvrir la discussion" : "Envoyer un signal"}
+                  </button>
+                )}
+              </div>
+
+            </div>
+          )}
         </div>
       )}
     </motion.div>
   )
 }
 
-
-// --- 2. LE DASHBOARD PRINCIPAL ---
+// --- DASHBOARD (Inchangé) ---
 export default function Dashboard() {
   const navigate = useNavigate()
   const [matches, setMatches] = useState([])
   const [myProfile, setMyProfile] = useState(null)
   const [loading, setLoading] = useState(true)
-  
-  // État pour gérer le profil ouvert (Sidebar)
-  const [selectedUserId, setSelectedUserId] = useState(null)
-  const [selectedSimilarity, setSelectedSimilarity] = useState(0)
+  const [selectedUser, setSelectedUser] = useState(null) 
 
   useEffect(() => {
-    fetchMatches()
-  }, [])
-
-  const fetchMatches = async () => {
-    try {
+    const fetchMatches = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return navigate('/')
 
-      // Récupérer MON profil
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single()
-
+      const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
       setMyProfile(profile)
 
       if (profile && profile.embedding) {
-        // Recherche Vectorielle (IA)
-        const { data: matchedUsers, error } = await supabase.rpc('match_students', {
+        const { data: matchedUsers } = await supabase.rpc('match_students', {
           query_embedding: profile.embedding,
           match_threshold: 0.5,
           match_count: 6
         })
-
-        if (error) console.error('Erreur matching:', error)
-        
-        const others = matchedUsers ? matchedUsers.filter(p => p.id !== user.id) : []
-        setMatches(others)
+        setMatches(matchedUsers ? matchedUsers.filter(p => p.id !== user.id) : [])
       }
-    } catch (error) {
-      console.error("Erreur:", error)
-    } finally {
       setLoading(false)
     }
-  }
+    fetchMatches()
+  }, [navigate])
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut() 
-  }
+  const handleLogout = async () => await supabase.auth.signOut() 
 
-  // Fonction pour ouvrir la sidebar
-  const openProfile = (user) => {
-    setSelectedUserId(user.id)
-    setSelectedSimilarity(user.similarity)
-  }
-
-  if (loading) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white">Chargement de la constellation...</div>
+  if (loading) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white">Chargement...</div>
 
   return (
     <div className="min-h-screen bg-philo-dark text-white p-4 relative overflow-hidden">
       
-      {/* Header */}
       <div className="flex justify-between items-center z-20 w-full max-w-4xl mx-auto py-4 px-4">
         <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
-        
         <div className="flex gap-2">
-          <button onClick={() => navigate('/profile')} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition" title="Mon Profil">
-             <UserCircle size={20} />
-          </button>
-          <button onClick={handleLogout} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition" title="Déconnexion">
-            <LogOut size={20} />
-          </button>
+          <button onClick={() => navigate('/profile')} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition"><UserCircle size={20} /></button>
+          <button onClick={handleLogout} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition"><LogOut size={20} /></button>
         </div>
       </div>
 
-      {/* LA CONSTELLATION (Zone centrale) */}
       <div className="relative h-[600px] w-full flex items-center justify-center">
-        
-        {/* MOI (Au centre) */}
-        <motion.div 
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          className="z-20 w-24 h-24 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary flex flex-col items-center justify-center shadow-[0_0_30px_rgba(139,92,246,0.5)] border-4 border-philo-dark"
-        >
+        {/* MOI */}
+        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="z-20 w-24 h-24 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary flex flex-col items-center justify-center shadow-[0_0_30px_rgba(139,92,246,0.5)] border-4 border-philo-dark">
           <span className="text-2xl">😎</span>
           <span className="text-xs font-bold mt-1">{myProfile?.pseudo || 'Moi'}</span>
         </motion.div>
 
-        {/* LES MATCHS (En orbite) */}
-        {matches.length === 0 ? (
-          <p className="absolute mt-32 text-gray-400">Aucun profil compatible trouvé pour l'instant...</p>
-        ) : (
-          matches.map((match, index) => {
+        {/* ORBITE */}
+        {matches.map((match, index) => {
             const angle = (index / matches.length) * 2 * Math.PI
             const radius = 160 
             const x = Math.cos(angle) * radius
@@ -227,56 +402,29 @@ export default function Dashboard() {
                 transition={{ delay: index * 0.1, type: 'spring' }}
                 className="absolute z-10 flex flex-col items-center cursor-pointer group"
                 whileHover={{ scale: 1.1 }}
-                onClick={() => openProfile(match)} // <--- CLIC ICI OUVRE LA SIDEBAR
+                onClick={() => setSelectedUser(match)}
               >
-                {/* La Bulle du Match */}
                 <div className="w-20 h-20 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center group-hover:bg-philo-primary/20 group-hover:border-philo-primary transition-colors relative">
                   <User className="text-gray-300 group-hover:text-white" />
-                  
-                  {/* Badge de pourcentage */}
-                  <div className="absolute -top-2 -right-2 bg-green-500 text-black text-xs font-bold px-2 py-1 rounded-full">
-                    {Math.round(match.similarity * 100)}%
-                  </div>
+                  <div className="absolute -top-2 -right-2 bg-green-500 text-black text-xs font-bold px-2 py-1 rounded-full">{Math.round(match.similarity * 100)}%</div>
                 </div>
-
-                {/* Info sous la bulle */}
                 <div className="mt-2 text-center">
                   <p className="font-bold text-sm">{match.pseudo}</p>
-                  {/* On affiche le domaine pour donner une petite idée sans tout dire */}
                   <p className="text-[10px] text-gray-400">{match.domaine || 'Étudiant'}</p>
                 </div>
               </motion.div>
             )
-          })
-        )}
+          })}
       </div>
 
-      {/* Info contextuelle */}
-      <div className="absolute bottom-6 left-0 w-full text-center text-sm text-gray-500">
-        Clique sur une planète pour analyser la vibe 🪐
-      </div>
-
-      {/* --- SIDEBAR INTELLIGENTE --- */}
       <AnimatePresence>
-        {selectedUserId && (
+        {selectedUser && (
           <>
-            {/* Overlay sombre */}
-            <motion.div 
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              onClick={() => setSelectedUserId(null)}
-              className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
-            />
-            
-            {/* Le panneau latéral */}
-            <UserProfileSidebar 
-              userId={selectedUserId}
-              similarity={selectedSimilarity}
-              onClose={() => setSelectedUserId(null)} 
-            />
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedUser(null)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
+            <UserProfileSidebar userId={selectedUser.id} similarity={selectedUser.similarity} onClose={() => setSelectedUser(null)} />
           </>
         )}
       </AnimatePresence>
-
     </div>
   )
 }

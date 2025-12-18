@@ -26,7 +26,7 @@ export default function Profile() {
   const [selectedParcours, setSelectedParcours] = useState('')
   const [selectedLieu, setSelectedLieu] = useState('')
 
-  // États Réponses Quiz (Pour affichage)
+  // États Réponses Quiz (Structure: { question: string, answer: string })
   const [myVibes, setMyVibes] = useState([])
 
   // 1. CHARGEMENT
@@ -55,22 +55,26 @@ export default function Profile() {
         setSelectedLieu(profile.etudes_lieu || '')
       }
 
-      // B. Récupérer les "Vibes" (Réponses au quiz via la table de liaison)
+      // B. Récupérer les Réponses AVEC les Questions
       const { data: answers } = await supabase
         .from('user_answers')
         .select(`
-          option_id,
+          question_id,
+          questions ( text ), 
           options ( text )
         `)
         .eq('user_id', user.id)
       
       if (answers) {
-        // On extrait juste le texte des options
-        const tags = answers.map(a => a.options?.text).filter(Boolean)
-        setMyVibes(tags)
+        // On formate les données pour l'affichage
+        const formattedVibes = answers.map(a => ({
+          question: a.questions?.text,
+          answer: a.options?.text
+        }))
+        setMyVibes(formattedVibes)
       }
 
-      // C. Récupérer les formations pour les listes
+      // C. Récupérer les formations
       const { data: form } = await supabase.from('formations').select('*')
       setFormationsData(form || [])
       
@@ -79,7 +83,7 @@ export default function Profile() {
     loadProfile()
   }, [navigate])
 
-  // --- LOGIQUE FILTRES SCOLAIRES ---
+  // --- LOGIQUE FILTRES ---
   const etudesOpts = [...new Set(formationsData.map(f => f.etude))].filter(Boolean).sort()
   const themesOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude).map(f => f.theme))].filter(Boolean).sort()
   const anneesOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude && f.theme === selectedTheme).map(f => f.annee))].filter(Boolean).sort()
@@ -91,36 +95,23 @@ export default function Profile() {
     e.preventDefault()
     setSaving(true)
 
-    // Mise à jour SQL simple (sans toucher au vecteur IA pour l'instant)
     const { error } = await supabase
       .from('profiles')
       .update({
-        pseudo,
-        sexe,
-        date_naissance: birthDate,
-        type_diplome: selectedEtude,
-        domaine: selectedTheme,
-        annee_etude: selectedAnnee,
-        intitule: selectedNom,
-        parcours: selectedParcours || null,
-        etudes_lieu: selectedLieu
+        pseudo, sexe, date_naissance: birthDate,
+        type_diplome: selectedEtude, domaine: selectedTheme, annee_etude: selectedAnnee,
+        intitule: selectedNom, parcours: selectedParcours || null, etudes_lieu: selectedLieu
       })
       .eq('id', user.id)
 
-    if (error) {
-      alert("Erreur lors de la sauvegarde.")
-    } else {
-      // Feedback visuel ou redirection
-      navigate('/app')
-    }
+    if (error) { alert("Erreur sauvegarde") } 
+    else { navigate('/app') }
     setSaving(false)
   }
 
-  // --- REFAIRE LE QUIZ ---
-  const handleRetakeQuiz = async () => {
-    // Optionnel : On peut vouloir supprimer les anciennes réponses avant d'y aller
-    // Mais l'Onboarding gère déjà l'écrasement.
-navigate('/onboarding', { state: { mode: 'edit' } })  }
+  const handleRetakeQuiz = () => {
+    navigate('/onboarding', { state: { mode: 'edit' } })
+  }
 
   const selectStyle = "w-full p-3 rounded-xl bg-slate-800 border border-slate-600 text-white focus:border-philo-primary focus:outline-none appearance-none cursor-pointer placeholder-gray-400"
 
@@ -224,9 +215,9 @@ navigate('/onboarding', { state: { mode: 'edit' } })  }
             </div>
           </div>
 
-          {/* 3. VIBES & PERSONNALITÉ (Lecture seule + Edit) */}
+          {/* 3. VIBES & PERSONNALITÉ (Affichage Détaillé) */}
           <div className="bg-gradient-to-br from-purple-900/40 to-blue-900/40 p-6 rounded-3xl border border-white/10 shadow-lg">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-2 text-purple-300">
                 <BrainCircuit size={24} />
                 <h2 className="font-bold uppercase text-sm tracking-wider">Ma Personnalité</h2>
@@ -240,18 +231,23 @@ navigate('/onboarding', { state: { mode: 'edit' } })  }
               </button>
             </div>
             
-            <p className="text-sm text-gray-400 mb-4">Voici les traits qui définissent ton matching actuel :</p>
-
-            {/* Affichage des Tags (Vibes) */}
-            <div className="flex flex-wrap gap-2">
+            {/* GRILLE DES QUESTIONS / RÉPONSES */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {myVibes.length > 0 ? (
                 myVibes.map((vibe, idx) => (
-                  <span key={idx} className="px-3 py-1.5 bg-black/30 border border-white/10 rounded-lg text-sm text-gray-200">
-                    {vibe}
-                  </span>
+                  <div key={idx} className="bg-black/30 border border-white/10 rounded-xl p-3">
+                    <p className="text-[10px] uppercase text-philo-primary font-bold mb-1 opacity-70">
+                      {vibe.question}
+                    </p>
+                    <p className="text-sm font-medium text-white">
+                      {vibe.answer}
+                    </p>
+                  </div>
                 ))
               ) : (
-                <span className="text-gray-500 italic text-sm">Aucune donnée... Refais le quiz !</span>
+                <div className="col-span-2 text-gray-500 italic text-sm text-center py-4 bg-black/20 rounded-xl">
+                  Aucune donnée... Refais le quiz pour calibrer ton IA !
+                </div>
               )}
             </div>
           </div>
