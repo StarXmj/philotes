@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+/* Tu peux garder tes styles perso en dessous */
+body {
+  background-color: #0f172a; 
+  color: white;
+}
