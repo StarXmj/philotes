@@ -116,7 +116,24 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
 
   const handleDelete = async (msgId) => {
     if (window.confirm("Supprimer ce message ?")) {
-      await supabase.from('messages').delete().eq('id', msgId)
+      
+      // 1. OPTIMISTIC UPDATE : On supprime de l'affichage TOUT DE SUITE
+      setMessages((currentMessages) => 
+        currentMessages.filter((msg) => msg.id !== msgId)
+      )
+
+      // 2. Ensuite, on envoie l'ordre à la base de données
+      const { error } = await supabase
+        .from('messages')
+        .delete()
+        .eq('id', msgId)
+
+      // (Optionnel) Si jamais ça échoue, on pourrait remettre le message, 
+      // mais pour un chat simple, ce n'est souvent pas nécessaire.
+      if (error) {
+        console.error("Erreur suppression:", error)
+        alert("Impossible de supprimer le message")
+      }
     }
   }
 
