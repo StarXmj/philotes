@@ -190,6 +190,7 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
   }, [userId])
 
   // Création de la connexion lors du premier message
+  // Création de la connexion lors du premier message
   const handleCreateConnection = async (firstMessage) => {
     // 1. Créer la connexion
     const { data: newConn, error: connError } = await supabase
@@ -197,7 +198,8 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
       .insert({
         sender_id: currentUser.id,
         receiver_id: userId,
-        status: 'pending' // En attente d'acceptation
+        status: 'pending',
+        message: firstMessage // <--- C'EST LA LIGNE QUI MANQUAIT !
       })
       .select()
       .single()
