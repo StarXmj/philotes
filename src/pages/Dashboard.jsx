@@ -5,7 +5,6 @@ import { User, MessageCircle, LogOut, UserCircle, X, BrainCircuit, Sparkles, Sen
 import { useNavigate } from 'react-router-dom'
 
 // Ajoute useRef dans les imports si ce n'est pas déjà fait
-import { useEffect, useState, useRef } from 'react'
 
 // ... (Gardez les autres imports)
 
