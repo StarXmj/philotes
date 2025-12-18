@@ -4,98 +4,169 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { User, MessageCircle, LogOut, UserCircle, X, BrainCircuit, Sparkles, Send, ArrowLeft, Clock, Lock, CheckCircle } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
-// --- COMPOSANT : CHAT INTERFACE (Style WhatsApp/Telegram) ---
+// Ajoute useRef dans les imports si ce n'est pas déjà fait
+import { useEffect, useState, useRef } from 'react'
+
+// ... (Gardez les autres imports)
+
+// --- PETIT COMPOSANT : LES 3 POINTS QUI BOUGENT ---
+const TypingIndicator = () => (
+  <div className="flex items-center gap-1 p-3 bg-white/10 rounded-2xl rounded-tl-none w-fit">
+    <motion.div
+      animate={{ y: [0, -5, 0] }}
+      transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
+      className="w-1.5 h-1.5 bg-gray-400 rounded-full"
+    />
+    <motion.div
+      animate={{ y: [0, -5, 0] }}
+      transition={{ duration: 0.6, repeat: Infinity, delay: 0.2 }}
+      className="w-1.5 h-1.5 bg-gray-400 rounded-full"
+    />
+    <motion.div
+      animate={{ y: [0, -5, 0] }}
+      transition={{ duration: 0.6, repeat: Infinity, delay: 0.4 }}
+      className="w-1.5 h-1.5 bg-gray-400 rounded-full"
+    />
+  </div>
+)
+
+// --- COMPOSANT CHAT AVEC REALTIME ---
 const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateConnection }) => {
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
   const [sending, setSending] = useState(false)
+  const [isRemoteTyping, setIsRemoteTyping] = useState(false) // Est-ce que l'autre écrit ?
+  
   const messagesEndRef = useRef(null)
+  const channelRef = useRef(null) // Pour garder la connexion ouverte
+  const typingTimeoutRef = useRef(null) // Pour arrêter l'animation si ça s'arrête
 
-  // Chargement des messages
+  // 1. CHARGEMENT INITIAL + TEMPS RÉEL
   useEffect(() => {
-    if (connection?.id) {
-      const fetchMessages = async () => {
-        const { data } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('connection_id', connection.id)
-          .order('created_at', { ascending: true })
-        setMessages(data || [])
-      }
-      fetchMessages()
+    if (!connection?.id) return
 
-      // (Optionnel) Ici on pourrait ajouter un supabase.channel pour le temps réel
+    // A. Charger l'historique
+    const fetchMessages = async () => {
+      const { data } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('connection_id', connection.id)
+        .order('created_at', { ascending: true })
+      setMessages(data || [])
     }
-  }, [connection])
+    fetchMessages()
 
-  // Scroll automatique vers le bas
+    // B. Mettre en place le canal Temps Réel (Supabase Realtime)
+    // On crée un canal unique pour cette conversation
+    channelRef.current = supabase.channel(`room:${connection.id}`)
+
+    channelRef.current
+      // 1. Écouter les nouveaux messages (INSERT dans la DB)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `connection_id=eq.${connection.id}`
+        },
+        (payload) => {
+          // On ajoute le message seulement si on ne l'a pas déjà (pour éviter les doublons avec l'ajout optimiste)
+          setMessages((current) => {
+            const exists = current.find(m => m.id === payload.new.id)
+            if (exists) return current
+            return [...current, payload.new]
+          })
+          // Si on reçoit un message, l'autre a fini d'écrire
+          setIsRemoteTyping(false)
+        }
+      )
+      // 2. Écouter le signal "Typing..." (Broadcast éphémère)
+      .on('broadcast', { event: 'typing' }, (payload) => {
+        // On vérifie que ce n'est pas moi qui écris (au cas où)
+        if (payload.userId !== currentUser.id) {
+          setIsRemoteTyping(true)
+          
+          // On efface les points après 3 secondes sans nouveau signal
+          clearTimeout(typingTimeoutRef.current)
+          typingTimeoutRef.current = setTimeout(() => {
+            setIsRemoteTyping(false)
+          }, 3000)
+        }
+      })
+      .subscribe()
+
+    // Nettoyage quand on quitte le chat
+    return () => {
+      supabase.removeChannel(channelRef.current)
+    }
+  }, [connection, currentUser.id])
+
+  // Scroll auto vers le bas
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages])
+  }, [messages, isRemoteTyping]) // On scroll aussi quand "..." apparait
 
-  // Calcul du temps restant (Compte à rebours)
-  const calculateTimeLeft = () => {
-    if (!connection) return "24h 00m" // Nouveau chat
-    if (connection.status === 'accepted') return "Illimité" // Chat validé
-    
-    const created = new Date(connection.created_at)
-    const expire = new Date(created.getTime() + 24 * 60 * 60 * 1000)
-    const now = new Date()
-    const diff = expire - now
-    
-    if (diff <= 0) return "Expiré"
-    
-    const h = Math.floor(diff / (1000 * 60 * 60))
-    const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-    return `${h}h ${m}m`
+  // Fonction pour dire "J'écris..."
+  const handleTyping = (e) => {
+    setInputText(e.target.value)
+
+    if (connection?.id && channelRef.current) {
+      // On envoie un signal léger aux autres abonnés du canal
+      channelRef.current.send({
+        type: 'broadcast',
+        event: 'typing',
+        payload: { userId: currentUser.id }
+      })
+    }
   }
 
   const sendMessage = async (e) => {
     e.preventDefault()
     if (!inputText.trim()) return
 
-    setSending(true)
     const text = inputText
-    setInputText('') // Optimistic clear
-
+    setInputText('') // Clear immédiat
+    // On arrête d'envoyer le signal typing (optionnel, le timeout gérera)
+    
+    // Logique d'envoi (inchangée)
     try {
       let currentConn = connection
-
-      // 1. Si pas de connexion, on la crée (Premier message)
       if (!currentConn) {
-        currentConn = await onCreateConnection(text) // Fonction passée par le parent
+        currentConn = await onCreateConnection(text)
       } else {
-        // 2. Sinon on ajoute le message
         await supabase.from('messages').insert({
           connection_id: currentConn.id,
           sender_id: currentUser.id,
           content: text
         })
       }
-
-      // Mise à jour locale (simulée pour la fluidité)
-      setMessages(prev => [...prev, {
-        id: 'temp-' + Date.now(),
-        sender_id: currentUser.id,
-        content: text,
-        created_at: new Date().toISOString()
-      }])
-
     } catch (error) {
       console.error("Erreur envoi:", error)
-    } finally {
-      setSending(false)
     }
+  }
+
+  // (Fonction calculateTimeLeft inchangée...)
+  const calculateTimeLeft = () => {
+    if (!connection) return "24h 00m"
+    if (connection.status === 'accepted') return "Illimité"
+    const created = new Date(connection.created_at)
+    const expire = new Date(created.getTime() + 24 * 60 * 60 * 1000)
+    const now = new Date()
+    const diff = expire - now
+    if (diff <= 0) return "Expiré"
+    const h = Math.floor(diff / (1000 * 60 * 60))
+    const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+    return `${h}h ${m}m`
   }
 
   return (
     <div className="flex flex-col h-full bg-slate-900">
-      {/* HEADER CHAT */}
+      {/* HEADER */}
       <div className="flex items-center gap-3 p-4 bg-slate-800 border-b border-white/10 shadow-md z-10">
         <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition text-gray-300">
           <ArrowLeft size={20} />
         </button>
-        
         <div className="flex-1">
           <h3 className="font-bold text-white">{targetUser.pseudo}</h3>
           <div className="flex items-center gap-1 text-xs text-yellow-400 font-mono">
@@ -105,12 +176,11 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
         </div>
       </div>
 
-      {/* ZONE MESSAGES */}
+      {/* MESSAGES */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/20">
         {messages.length === 0 && (
           <div className="text-center text-gray-500 text-sm mt-10 p-4">
             <p>C'est le début d'un nouveau lien. ✨</p>
-            <p className="text-xs mt-1">Écris un message pour activer le compte à rebours de 24h.</p>
           </div>
         )}
 
@@ -128,20 +198,28 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
             </div>
           )
         })}
+
+        {/* INDICATEUR DE FRAPPE (Apparaît si l'autre écrit) */}
+        {isRemoteTyping && (
+          <div className="flex justify-start">
+            <TypingIndicator />
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
-      {/* INPUT ZONE */}
+      {/* INPUT */}
       <form onSubmit={sendMessage} className="p-3 bg-slate-800 border-t border-white/10 flex gap-2">
         <input
           type="text"
           value={inputText}
-          onChange={e => setInputText(e.target.value)}
+          onChange={handleTyping} // <-- On a changé onChange ici
           placeholder="Ton message..."
           className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none"
         />
         <button 
-          disabled={sending || !inputText.trim()}
+          disabled={!inputText.trim()}
           type="submit" 
           className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50"
         >
