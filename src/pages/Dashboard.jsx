@@ -1,12 +1,10 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
-import {User,MessageCircle,LogOut,UserCircle,X,BrainCircuit,Sparkles,Send,ArrowLeft,Clock,Lock,CheckCircle,Pencil,Trash2,Check} from 'lucide-react'
+import {User,MessageCircle,LogOut,UserCircle,X,BrainCircuit,Sparkles,Send,ArrowLeft,Clock,Lock,CheckCircle,Pencil,Trash2,Check,Unlink, UserPlus} from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
-// Ajoute useRef dans les imports si ce n'est pas déjà fait
-
-// ... (Gardez les autres imports)
+const MESSAGE_LIFETIME_HOURS = 24; 
 
 // --- PETIT COMPOSANT : LES 3 POINTS QUI BOUGENT ---
 const TypingIndicator = () => (
@@ -29,22 +27,61 @@ const TypingIndicator = () => (
   </div>
 )
 
+// --- COMPOSANT : COMPTE À REBOURS PAR MESSAGE ---
+const MessageTimer = ({ createdAt }) => {
+  const [timeLeft, setTimeLeft] = useState("")
+
+  useEffect(() => {
+    const updateTimer = () => {
+      const created = new Date(createdAt).getTime()
+      const expire = created + MESSAGE_LIFETIME_HOURS * 60 * 60 * 1000;
+      const now = new Date().getTime()
+      const diff = expire - now
+
+      if (diff <= 0) {
+        setTimeLeft("Expiré")
+      } else {
+        const h = Math.floor(diff / (1000 * 60 * 60))
+        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+        setTimeLeft(`${h}h ${m}m`)
+      }
+    }
+
+    updateTimer()
+    const interval = setInterval(updateTimer, 60000)
+    return () => clearInterval(interval)
+  }, [createdAt])
+
+  return (
+    <div className="text-[9px] opacity-60 flex items-center justify-end gap-1 mt-1 font-mono">
+      <Clock size={10} /> {timeLeft}
+    </div>
+  )
+}
+
 // --- COMPOSANT CHAT AVEC REALTIME ---
 const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateConnection }) => {
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
-  const [sending, setSending] = useState(false)
   const [isRemoteTyping, setIsRemoteTyping] = useState(false)
   
   // --- ÉTATS POUR L'ÉDITION ---
-  const [editingId, setEditingId] = useState(null) // ID du message en cours de modif
-  const [editText, setEditText] = useState('')     // Texte en cours de modif
+  const [editingId, setEditingId] = useState(null)
+  const [editText, setEditText] = useState('')
   
   const messagesEndRef = useRef(null)
   const channelRef = useRef(null)
   const typingTimeoutRef = useRef(null)
 
-  // 1. CHARGEMENT INITIAL + TEMPS RÉEL (AMÉLIORÉ)
+  // Calcul du statut pour l'affichage header
+  let statusLabel = "Aucun lien";
+  if (connection?.status === 'pending') statusLabel = "En attente";
+  if (connection?.status === 'accepted') statusLabel = "Lien actif ✨";
+
+  // Peut-on discuter ? (Oui si accepté, ou si pas de connexion du tout pour envoyer le 1er msg)
+  // Si c'est "pending", on bloque.
+  const canChat = !connection || connection.status === 'accepted';
+
   useEffect(() => {
     if (!connection?.id) return
 
@@ -61,17 +98,15 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     channelRef.current = supabase.channel(`room:${connection.id}`)
 
     channelRef.current
-      // ON ÉCOUTE TOUS LES ÉVÉNEMENTS (*)
       .on(
         'postgres_changes',
         {
-          event: '*', // INSERT, UPDATE, DELETE
+          event: '*',
           schema: 'public',
           table: 'messages',
           filter: `connection_id=eq.${connection.id}`
         },
         (payload) => {
-          // CAS 1 : NOUVEAU MESSAGE
           if (payload.eventType === 'INSERT') {
             setMessages((current) => {
               if (current.find(m => m.id === payload.new.id)) return current
@@ -79,13 +114,11 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
             })
             setIsRemoteTyping(false)
           } 
-          // CAS 2 : MODIFICATION
           else if (payload.eventType === 'UPDATE') {
             setMessages((current) => 
               current.map(m => m.id === payload.new.id ? payload.new : m)
             )
           }
-          // CAS 3 : SUPPRESSION
           else if (payload.eventType === 'DELETE') {
             setMessages((current) => 
               current.filter(m => m.id !== payload.old.id)
@@ -106,34 +139,21 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
   }, [connection, currentUser.id])
 
   useEffect(() => {
-    // On ne scroll en bas que si on n'est pas en train d'éditer un vieux message
     if (!editingId) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
     }
   }, [messages, isRemoteTyping, editingId])
 
-  // --- ACTIONS UTILISATEUR ---
-
   const handleDelete = async (msgId) => {
     if (window.confirm("Supprimer ce message ?")) {
-      
-      // 1. OPTIMISTIC UPDATE : On supprime de l'affichage TOUT DE SUITE
       setMessages((currentMessages) => 
         currentMessages.filter((msg) => msg.id !== msgId)
       )
-
-      // 2. Ensuite, on envoie l'ordre à la base de données
       const { error } = await supabase
         .from('messages')
         .delete()
         .eq('id', msgId)
-
-      // (Optionnel) Si jamais ça échoue, on pourrait remettre le message, 
-      // mais pour un chat simple, ce n'est souvent pas nécessaire.
-      if (error) {
-        console.error("Erreur suppression:", error)
-        alert("Impossible de supprimer le message")
-      }
+      if (error) console.error("Erreur suppression:", error)
     }
   }
 
@@ -148,18 +168,15 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
   }
 
   const saveEdit = async () => {
-    if (!editText.trim()) return handleDelete(editingId) // Vide = Supprimer ? Ou empêcher.
-    
+    if (!editText.trim()) return handleDelete(editingId)
     await supabase
       .from('messages')
       .update({ content: editText })
       .eq('id', editingId)
-    
     setEditingId(null)
     setEditText('')
   }
 
-  // ... (Garde handleTyping, sendMessage, calculateTimeLeft tels quels)
   const handleTyping = (e) => {
     setInputText(e.target.value)
     if (connection?.id && channelRef.current) {
@@ -176,6 +193,7 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     try {
       let currentConn = connection
       if (!currentConn) {
+        // C'est ici que l'envoi d'un message crée la demande de lien automatiquement
         currentConn = await onCreateConnection(text)
       } else {
         await supabase.from('messages').insert({
@@ -187,14 +205,6 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     } catch (error) { console.error(error) }
   }
 
-  const calculateTimeLeft = () => {
-    if (!connection) return "24h 00m"
-    if (connection.status === 'accepted') return "Illimité"
-    const diff = new Date(connection.created_at).getTime() + 24 * 3600 * 1000 - new Date().getTime()
-    if (diff <= 0) return "Expiré"
-    return `${Math.floor(diff / 3600000)}h ${Math.floor((diff % 3600000) / 60000)}m`
-  }
-
   return (
     <div className="flex flex-col h-full bg-slate-900">
       {/* HEADER */}
@@ -202,10 +212,11 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
         <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition text-gray-300">
           <ArrowLeft size={20} />
         </button>
+        
         <div className="flex-1">
           <h3 className="font-bold text-white">{targetUser.pseudo}</h3>
-          <div className="flex items-center gap-1 text-xs text-yellow-400 font-mono">
-            <Clock size={12} /> {calculateTimeLeft()}
+          <div className={`text-xs flex items-center gap-1 ${connection?.status === 'accepted' ? 'text-green-400' : 'text-gray-400'}`}>
+             {statusLabel}
           </div>
         </div>
       </div>
@@ -213,7 +224,9 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
       {/* MESSAGES */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/20">
         {messages.length === 0 && (
-          <div className="text-center text-gray-500 text-sm mt-10 p-4">C'est le début d'un nouveau lien. ✨</div>
+          <div className="text-center text-gray-500 text-sm mt-10 p-4">
+             {!connection ? "Envoyer un message créera automatiquement une demande de lien." : "Début de la conversation."}
+          </div>
         )}
 
         {messages.map((msg) => {
@@ -222,12 +235,9 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
 
           return (
             <div key={msg.id} className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-              
-              {/* BULLE DE MESSAGE */}
               <div className={`max-w-[85%] relative ${isEditing ? 'w-full' : ''}`}>
                 
                 {isEditing ? (
-                  // MODE ÉDITION
                   <div className="flex gap-2 w-full">
                     <input 
                       autoFocus
@@ -241,20 +251,16 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
                     <button onClick={cancelEdit} className="p-2 bg-red-500/20 text-red-400 rounded-full hover:bg-red-500/40"><X size={14}/></button>
                   </div>
                 ) : (
-                  // MODE AFFICHAGE NORMAL
                   <div className={`p-3 rounded-2xl text-sm break-words relative ${
                     isMe 
                       ? 'bg-philo-primary text-white rounded-tr-none' 
                       : 'bg-white/10 text-gray-200 rounded-tl-none'
                   }`}>
                     {msg.content}
-                    
-                    {/* Indicateur "Modifié" */}
-                    {/* Tu peux ajouter une colonne updated_at plus tard pour afficher "modifié" */}
+                    <MessageTimer createdAt={msg.created_at} />
                   </div>
                 )}
 
-                {/* OUTILS (Crayon / Poubelle) - Apparaissent au survol, uniquement pour moi */}
                 {isMe && !isEditing && (
                   <div className="absolute top-0 -left-16 h-full flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity px-2">
                     <button onClick={() => startEdit(msg)} className="p-1.5 bg-slate-800 text-gray-400 hover:text-white rounded-full hover:bg-white/10" title="Modifier">
@@ -274,16 +280,19 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
         <div ref={messagesEndRef} />
       </div>
 
-      {/* INPUT (Caché si on édite un message pour éviter la confusion ?) Non, on laisse. */}
+      {/* INPUT */}
       <form onSubmit={sendMessage} className="p-3 bg-slate-800 border-t border-white/10 flex gap-2">
         <input
           type="text"
           value={inputText}
           onChange={handleTyping}
-          placeholder="Ton message..."
-          className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none"
+          // On désactive l'input si le lien est en attente (on ne peut pas discuter sans acceptation)
+          // SAUF si !connection (car c'est le moment d'envoyer le premier message)
+          disabled={!canChat} 
+          placeholder={!canChat ? "En attente d'acceptation..." : "Ton message..."}
+          className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none disabled:opacity-50 disabled:cursor-not-allowed"
         />
-        <button disabled={!inputText.trim()} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50">
+        <button disabled={!inputText.trim() || !canChat} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50">
           <Send size={18} />
         </button>
       </form>
@@ -292,9 +301,9 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
 }
 
 
-// --- SIDEBAR INTELLIGENTE (Gère Profil OU Chat) ---
+// --- SIDEBAR INTELLIGENTE ---
 const UserProfileSidebar = ({ userId, onClose, similarity }) => {
-  const [view, setView] = useState('PROFILE') // 'PROFILE' ou 'CHAT'
+  const [view, setView] = useState('PROFILE')
   const [profile, setProfile] = useState(null)
   const [answers, setAnswers] = useState([])
   const [connection, setConnection] = useState(null)
@@ -307,15 +316,12 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
       const { data: { user } } = await supabase.auth.getUser()
       setCurrentUser(user)
 
-      // 1. Profil Cible
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).single()
       setProfile(prof)
 
-      // 2. Vibe
       const { data: ans } = await supabase.from('user_answers').select('question_id, questions(text), options(text)').eq('user_id', userId)
       setAnswers(ans || [])
 
-      // 3. Connexion existante ?
       const { data: conn } = await supabase
         .from('connections')
         .select('*')
@@ -328,24 +334,21 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
     if (userId) init()
   }, [userId])
 
-  // Création de la connexion lors du premier message
-  // Création de la connexion lors du premier message
+  // Fonction utilisée par le ChatInterface pour créer le lien via message
   const handleCreateConnection = async (firstMessage) => {
-    // 1. Créer la connexion
     const { data: newConn, error: connError } = await supabase
       .from('connections')
       .insert({
         sender_id: currentUser.id,
         receiver_id: userId,
         status: 'pending',
-        message: firstMessage // <--- C'EST LA LIGNE QUI MANQUAIT !
+        message: firstMessage 
       })
       .select()
       .single()
 
     if (connError) throw connError
 
-    // 2. Insérer le premier message dans la table messages
     await supabase.from('messages').insert({
       connection_id: newConn.id,
       sender_id: currentUser.id,
@@ -356,7 +359,24 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
     return newConn
   }
 
-  // Accepter la demande
+  // Fonction pour le bouton "Demander un lien" (sans message texte explicite)
+  const handleSimpleLinkRequest = async () => {
+    const { data: newConn, error } = await supabase
+      .from('connections')
+      .insert({
+        sender_id: currentUser.id,
+        receiver_id: userId,
+        status: 'pending',
+        message: "👋 Demande de connexion" // Message système par défaut
+      })
+      .select()
+      .single()
+
+    if (!error) {
+       setConnection(newConn)
+    }
+  }
+
   const handleAccept = async () => {
     const { data } = await supabase.from('connections').update({ status: 'accepted' }).eq('id', connection.id).select().single()
     setConnection(data)
@@ -365,37 +385,69 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
   const isAccepted = connection?.status === 'accepted'
   const isReceiver = connection?.receiver_id === currentUser?.id
 
+  // Rompre le lien (Uniquement si accepté)
+  const handleBreakLink = async () => {
+    if (window.confirm("Es-tu sûr de vouloir couper le lien ? L'historique et les infos seront perdus.")) {
+      const { error } = await supabase
+        .from('connections')
+        .delete()
+        .eq('id', connection.id)
+
+      if (!error) {
+        setConnection(null)
+        setView('PROFILE')
+      } else {
+        alert("Impossible de rompre le lien.")
+      }
+    }
+  }
+
   return (
     <motion.div
       initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
       transition={{ type: "spring", damping: 25, stiffness: 200 }}
       className="fixed inset-y-0 right-0 w-full md:w-96 bg-slate-900/95 backdrop-blur-xl border-l border-white/10 shadow-2xl z-50 overflow-hidden flex flex-col"
     >
-      {/* --- VUE CHAT --- */}
       {view === 'CHAT' ? (
         <ChatInterface 
           currentUser={currentUser} 
           targetUser={profile} 
           connection={connection}
-          onBack={() => setView('PROFILE')} // Retour au profil
+          onBack={() => setView('PROFILE')}
           onCreateConnection={handleCreateConnection}
         />
       ) : (
         
-        /* --- VUE PROFIL --- */
         <div className="flex flex-col h-full overflow-y-auto">
           {/* Header Profil */}
           <div className="sticky top-0 bg-slate-900/90 backdrop-blur-md border-b border-white/10 p-4 flex justify-between items-center z-10">
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <BrainCircuit className="text-philo-primary" /> Vibe Check
+              <BrainCircuit className="text-philo-primary" /> 
+              Vibe Check
             </h2>
-            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition"><X size={24} /></button>
+            
+            <div className="flex gap-2">
+              {/* BOUTON ROMPRE LE LIEN : Visible SEULEMENT si accepté */}
+              {connection && connection.status === 'accepted' && (
+                <button 
+                  onClick={handleBreakLink} 
+                  className="p-2 hover:bg-red-500/20 text-gray-400 hover:text-red-500 rounded-full transition"
+                  title="Rompre le lien"
+                >
+                  <Unlink size={20} />
+                </button>
+              )}
+
+              <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition">
+                <X size={24} />
+              </button>
+            </div>
           </div>
 
           {loading ? (
             <div className="p-8 text-center text-gray-400">Scan en cours...</div>
           ) : (
-            <div className="p-6 space-y-8 pb-20">
+            <div className="p-6 space-y-8 pb-32"> {/* pb-32 pour laisser la place aux boutons en bas */}
               
               {/* IDENTITÉ */}
               <div className="text-center relative">
@@ -451,22 +503,50 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
               </div>
 
               {/* BARRE D'ACTION (FIXE EN BAS) */}
-              <div className="fixed bottom-0 right-0 w-full md:w-96 p-4 bg-slate-900 border-t border-white/10 backdrop-blur-xl">
-                {connection && !isAccepted && isReceiver ? (
-                  // CAS : Demande reçue
+              <div className="fixed bottom-0 right-0 w-full md:w-96 p-4 bg-slate-900 border-t border-white/10 backdrop-blur-xl flex flex-col gap-3">
+                
+                {/* CAS 1 : AUCUN LIEN (Montrer les 2 boutons) */}
+                {!connection && (
+                  <>
+                     <button 
+                      onClick={handleSimpleLinkRequest}
+                      className="w-full py-3 bg-white/10 hover:bg-white/20 rounded-xl font-bold text-white transition flex items-center justify-center gap-2 border border-white/10"
+                    >
+                      <UserPlus size={20} /> Demander un lien
+                    </button>
+                    <button 
+                      onClick={() => setView('CHAT')}
+                      className="w-full py-3 bg-gradient-to-r from-philo-primary to-philo-secondary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20"
+                    >
+                      <MessageCircle size={20} /> Envoyer un message
+                    </button>
+                  </>
+                )}
+
+                {/* CAS 2 : DEMANDE ENVOYÉE (Pending) PAR MOI */}
+                {connection && connection.status === 'pending' && !isReceiver && (
+                  <div className="w-full py-3 bg-white/5 rounded-xl text-gray-400 font-bold flex items-center justify-center gap-2 border border-white/10 cursor-not-allowed">
+                     <Clock size={20} /> En attente...
+                  </div>
+                )}
+
+                {/* CAS 3 : DEMANDE REÇUE (Pending) PAR L'AUTRE */}
+                {connection && connection.status === 'pending' && isReceiver && (
                   <button onClick={handleAccept} className="w-full py-3 bg-green-500 hover:bg-green-600 rounded-xl text-black font-bold flex items-center justify-center gap-2 shadow-lg shadow-green-500/20">
-                    <CheckCircle size={20} /> Accepter le lien ({profile?.pseudo})
-                  </button>
-                ) : (
-                  // CAS : Pas de lien ou déjà accepté ou envoyé par moi
-                  <button 
-                    onClick={() => setView('CHAT')}
-                    className="w-full py-3 bg-gradient-to-r from-philo-primary to-philo-secondary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20"
-                  >
-                    <MessageCircle size={20} />
-                    {connection ? "Ouvrir la discussion" : "Envoyer un signal"}
+                    <CheckCircle size={20} /> Accepter le lien
                   </button>
                 )}
+
+                {/* CAS 4 : LIEN ACCEPTÉ */}
+                {connection && connection.status === 'accepted' && (
+                   <button 
+                    onClick={() => setView('CHAT')}
+                    className="w-full py-3 bg-philo-primary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2"
+                  >
+                    <MessageCircle size={20} /> Discuter
+                  </button>
+                )}
+
               </div>
 
             </div>
