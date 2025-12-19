@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useLayoutEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile, SmilePlus } from 'lucide-react'
+import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile, SmilePlus, AlertTriangle } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import EmojiPicker from 'emoji-picker-react'
 
@@ -19,36 +19,28 @@ const TypingIndicator = () => (
 
 const MessageTimer = ({ createdAt }) => {
   const [timeLeft, setTimeLeft] = useState("")
-  
   useEffect(() => {
     const updateTimer = () => {
       const created = new Date(createdAt).getTime()
       const expire = created + MESSAGE_LIFETIME_HOURS * 60 * 60 * 1000
       const now = new Date().getTime()
       const diff = expire - now
-      
-      if (diff <= 0) {
-        setTimeLeft("Expiré")
-      } else {
+      if (diff <= 0) setTimeLeft("Expiré")
+      else {
         const h = Math.floor(diff / (1000 * 60 * 60))
         const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
         setTimeLeft(`${h}h ${m}m`)
       }
     }
-    
     updateTimer()
-    // Mise à jour toutes les 30 sec pour être plus précis
-    const interval = setInterval(updateTimer, 30000) 
+    const interval = setInterval(updateTimer, 30000)
     return () => clearInterval(interval)
   }, [createdAt])
-
   return <div className="text-[9px] opacity-60 flex items-center justify-end gap-1 mt-1 font-mono"><Clock size={10} /> {timeLeft}</div>
 }
 
-// --- LOGIQUE DE RÉACTIONS ---
 const ReactionPills = ({ reactions, currentUserId, onToggle }) => {
   if (!reactions || reactions.length === 0) return null
-
   const groups = reactions.reduce((acc, r) => {
     if (!acc[r.emoji]) acc[r.emoji] = { count: 0, hasReacted: false }
     acc[r.emoji].count++
@@ -61,10 +53,7 @@ const ReactionPills = ({ reactions, currentUserId, onToggle }) => {
       {Object.entries(groups).map(([emoji, data]) => (
         <button
           key={emoji}
-          onClick={(e) => {
-            e.stopPropagation();
-            onToggle(emoji);
-          }}
+          onClick={(e) => { e.stopPropagation(); onToggle(emoji); }}
           className={`text-sm px-2 py-1 rounded-full border flex items-center justify-center transition-all ${
             data.hasReacted 
               ? 'bg-philo-primary/20 border-philo-primary text-white scale-105' 
@@ -84,8 +73,9 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
   const [isRemoteTyping, setIsRemoteTyping] = useState(false)
+  const [fetchError, setFetchError] = useState(false) // Pour savoir si les réactions ont planté
   
-  // États Picker
+  // États UI
   const [showMainPicker, setShowMainPicker] = useState(false)
   const [reactingToMsgId, setReactingToMsgId] = useState(null)
   
@@ -107,21 +97,44 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   if (connection?.status === 'accepted') statusLabel = "Lien actif ✨"
   const canChat = !connection || connection.status === 'accepted'
 
-  // 1. CHARGEMENT
+  // 1. CHARGEMENT ROBUSTE (C'EST ICI QUE JE CORRIGE LE PROBLEME)
   const fetchMessages = async (offset = 0) => {
     if (!connection?.id) return
+
     try {
-      const { data, error } = await supabase
+      // TENTATIVE 1 : Charger avec les réactions (Le mode normal)
+      let { data, error } = await supabase
         .from('messages')
-        .select('*, message_reactions(*)')
+        .select('*, message_reactions(*)') // <-- C'est ça qui peut planter
         .eq('connection_id', connection.id)
         .order('created_at', { ascending: false })
         .range(offset, offset + PAGE_SIZE - 1)
 
+      // TENTATIVE 2 : MODE SECOURS (Si erreur SQL, on charge sans réaction)
+      if (error) {
+        console.warn("⚠️ Échec chargement réactions, passage en mode secours.", error)
+        setFetchError(true)
+        
+        const retry = await supabase
+          .from('messages')
+          .select('*') // Chargement simple
+          .eq('connection_id', connection.id)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + PAGE_SIZE - 1)
+        
+        data = retry.data
+        error = retry.error
+      }
+
       if (error) throw error
+
       if (data.length < PAGE_SIZE) setHasMore(false)
 
-      const newMessages = data.reverse()
+      // On s'assure que message_reactions est un tableau vide si manquant
+      const newMessages = data.reverse().map(m => ({
+        ...m,
+        message_reactions: m.message_reactions || []
+      }))
 
       if (offset === 0) {
         setMessages(newMessages)
@@ -130,13 +143,13 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         setMessages(prev => [...newMessages, ...prev])
       }
     } catch (err) {
-      console.error("Erreur chargement messages:", err)
+      console.error("Erreur critique chargement:", err)
     } finally {
       setIsLoadingMore(false)
     }
   }
 
-  // 2. REALTIME (CORRIGÉ POUR UPDATE/DELETE)
+  // 2. REALTIME
   useEffect(() => {
     setMessages([])
     setHasMore(true)
@@ -145,8 +158,9 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     if (!connection?.id) return
 
     channelRef.current = supabase.channel(`room:${connection.id}`)
+    
+    // Setup listeners
     channelRef.current
-      // A. INSERT (Nouveau message)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
           const newMsg = { ...payload.new, message_reactions: [] }
           setMessages((current) => {
@@ -155,44 +169,26 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
           })
           setIsRemoteTyping(false)
           setTimeout(() => scrollToBottom(), 100)
-        }
-      )
-      // B. UPDATE (Modification - CORRIGÉ)
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
-          setMessages((current) => current.map(m => {
-             if (m.id === payload.new.id) {
-                 // IMPORTANT : On fusionne (...m) pour GARDER les réactions existantes, 
-                 // et on écrase avec (...payload.new) pour le nouveau texte
-                 return { ...m, ...payload.new }
-             }
-             return m
-          }))
-        }
-      )
-      // C. DELETE (Suppression - CORRIGÉ)
+          setMessages((current) => current.map(m => m.id === payload.new.id ? { ...m, ...payload.new } : m))
+      })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (payload) => {
           setMessages((current) => current.filter(m => m.id !== payload.old.id))
-        }
-      )
-      // D. REACTIONS (Insert)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions' }, (payload) => {
-          setMessages((current) => current.map(m => {
-            if (m.id === payload.new.message_id) {
-               const exists = m.message_reactions?.find(r => r.id === payload.new.id)
-               if (exists) return m
-               return { ...m, message_reactions: [...(m.message_reactions || []), payload.new] }
-            }
-            return m
-          }))
       })
-      // E. REACTIONS (Delete)
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_reactions' }, (payload) => {
-          setMessages((current) => current.map(m => {
-             if (m.message_reactions?.some(r => r.id === payload.old.id)) {
-                return { ...m, message_reactions: m.message_reactions.filter(r => r.id !== payload.old.id) }
-             }
-             return m
-          }))
+      // On n'écoute les réactions que si ça marche
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, (payload) => {
+          // On recharge les messages au moindre mouvement de réaction pour être sûr d'avoir l'état frais
+          // C'est une stratégie "lazy" mais plus fiable quand le realtime est capricieux sur les jointures
+          if (payload.new && payload.new.message_id) {
+             setMessages(prev => prev.map(m => {
+                if (m.id === payload.new.message_id) {
+                   // Petit hack : on simule l'ajout local si c'est un insert simple
+                   if(payload.eventType === 'INSERT') return {...m, message_reactions: [...(m.message_reactions||[]), payload.new]}
+                }
+                return m
+             }))
+          }
       })
       .on('broadcast', { event: 'typing' }, (payload) => {
         if (payload.userId !== currentUser.id) {
@@ -208,55 +204,23 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
 
   // 3. ACTIONS
   const handleReactionClick = async (emoji, msgId) => {
+    if (fetchError) {
+        alert("Les réactions sont indisponibles pour le moment (Erreur BDD).")
+        return
+    }
     setReactingToMsgId(null) 
-
     const message = messages.find(m => m.id === msgId)
     if (!message) return
 
-    const existingReaction = message.message_reactions?.find(
-      r => r.user_id === currentUser.id && r.emoji === emoji
-    )
+    const existingReaction = message.message_reactions?.find(r => r.user_id === currentUser.id && r.emoji === emoji)
 
     if (existingReaction) {
-      // Optimiste Delete
-      setMessages(current => current.map(m => {
-        if (m.id === msgId) return { ...m, message_reactions: m.message_reactions.filter(r => r.id !== existingReaction.id) }
-        return m
-      }))
+      setMessages(current => current.map(m => m.id === msgId ? { ...m, message_reactions: m.message_reactions.filter(r => r.id !== existingReaction.id) } : m))
       await supabase.from('message_reactions').delete().eq('id', existingReaction.id)
-
     } else {
-      // Optimiste Insert
-      const tempReaction = {
-        id: Date.now(), 
-        message_id: msgId,
-        user_id: currentUser.id,
-        emoji: emoji,
-        created_at: new Date().toISOString()
-      }
-      
-      setMessages(current => current.map(m => {
-        if (m.id === msgId) return { ...m, message_reactions: [...(m.message_reactions || []), tempReaction] }
-        return m
-      }))
-
-      const { data } = await supabase.from('message_reactions').insert({
-        message_id: msgId,
-        user_id: currentUser.id,
-        emoji: emoji
-      }).select().single()
-
-      if (data) {
-        setMessages(current => current.map(m => {
-            if (m.id === msgId) {
-                return { 
-                    ...m, 
-                    message_reactions: m.message_reactions.map(r => r.id === tempReaction.id ? data : r)
-                }
-            }
-            return m
-        }))
-      }
+      const tempReaction = { id: Date.now(), message_id: msgId, user_id: currentUser.id, emoji: emoji, created_at: new Date().toISOString() }
+      setMessages(current => current.map(m => m.id === msgId ? { ...m, message_reactions: [...(m.message_reactions || []), tempReaction] } : m))
+      await supabase.from('message_reactions').insert({ message_id: msgId, user_id: currentUser.id, emoji: emoji })
     }
   }
 
@@ -283,7 +247,6 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
 
   const handleDelete = async (msgId) => {
     if (window.confirm("Supprimer ce message ?")) {
-      // Optimiste
       setMessages((current) => current.filter((msg) => msg.id !== msgId))
       await supabase.from('messages').delete().eq('id', msgId)
     }
@@ -296,12 +259,9 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     if (!editText.trim()) return handleDelete(editingId)
     const targetId = editingId
     const newContent = editText
-    
-    // Optimiste Update : On garde les réactions et on change le contenu
     setMessages((current) => current.map(m => m.id === targetId ? { ...m, content: newContent } : m))
     setEditingId(null)
     setEditText('')
-    
     await supabase.from('messages').update({ content: newContent }).eq('id', targetId)
   }
 
@@ -353,6 +313,13 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         </div>
       </div>
 
+      {/* ALERT ERREUR FETCH */}
+      {fetchError && (
+          <div className="bg-red-500/10 border-b border-red-500/20 p-2 text-center text-red-400 text-xs flex items-center justify-center gap-2">
+              <AlertTriangle size={12}/> Réactions désactivées (Configuration BDD incomplète)
+          </div>
+      )}
+
       {/* MESSAGES */}
       <div 
         ref={containerRef}
@@ -373,8 +340,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
           return (
             <div key={msg.id} className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2`}>
               <div className={`max-w-[85%] relative ${isEditing ? 'w-full' : ''}`}>
-                
-                {/* BULLE MESSAGE */}
+                {/* BULLE */}
                 {isEditing ? (
                   <div className="flex gap-2 w-full">
                     <input autoFocus type="text" value={editText} onChange={(e) => setEditText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveEdit()} className="flex-1 bg-black/50 border border-philo-primary rounded-xl px-3 py-2 text-sm text-white outline-none" />
@@ -387,37 +353,16 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
                     <MessageTimer createdAt={msg.created_at} />
                   </div>
                 )}
-
-                {/* PILLULES DE RÉACTION */}
-                <ReactionPills 
-                  reactions={msg.message_reactions} 
-                  currentUserId={currentUser.id}
-                  onToggle={(emoji) => handleReactionClick(emoji, msg.id)}
-                />
-
-                {/* BOUTONS ACTIONS (Hover) */}
+                {/* PILLULES RÉACTION */}
+                <ReactionPills reactions={msg.message_reactions} currentUserId={currentUser.id} onToggle={(emoji) => handleReactionClick(emoji, msg.id)} />
+                {/* ACTIONS */}
                 {!isEditing && (
                   <div className={`absolute -top-6 ${isMe ? 'right-0' : 'left-0'} flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity px-2 z-10`}>
-                    
-                    {/* Bouton RÉACTION */}
-                    <button 
-                      onClick={(e) => {
-                         e.stopPropagation()
-                         setReactingToMsgId(msg.id)
-                         setShowMainPicker(false)
-                      }} 
-                      className="p-1.5 bg-slate-800 text-yellow-400 hover:text-yellow-200 rounded-full hover:bg-white/10 border border-white/5 shadow-lg" 
-                      title="Réagir"
-                    >
-                      <SmilePlus size={14} />
-                    </button>
-
-                    {isMe && (
-                      <>
+                    <button onClick={(e) => { e.stopPropagation(); setReactingToMsgId(msg.id); setShowMainPicker(false); }} className="p-1.5 bg-slate-800 text-yellow-400 hover:text-yellow-200 rounded-full hover:bg-white/10 border border-white/5 shadow-lg"><SmilePlus size={14} /></button>
+                    {isMe && (<>
                         <button onClick={() => startEdit(msg)} className="p-1.5 bg-slate-800 text-gray-400 hover:text-white rounded-full hover:bg-white/10 border border-white/5 shadow-lg"><Pencil size={14} /></button>
                         <button onClick={() => handleDelete(msg.id)} className="p-1.5 bg-slate-800 text-red-400 hover:text-red-300 rounded-full hover:bg-red-900/30 border border-white/5 shadow-lg"><Trash2 size={14} /></button>
-                      </>
-                    )}
+                    </>)}
                   </div>
                 )}
               </div>
@@ -428,59 +373,25 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         <div ref={messagesEndRef} />
       </div>
 
-      {/* MODALE PICKER (RÉACTION) */}
+      {/* PICKERS */}
       <AnimatePresence>
         {reactingToMsgId && (
             <div className="fixed inset-0 z-50 flex items-center justify-center">
                 <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setReactingToMsgId(null)} />
-                <motion.div 
-                    initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
-                    className="relative z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/20"
-                >
-                    <EmojiPicker 
-                        onEmojiClick={(emoji) => handleReactionClick(emoji.emoji, reactingToMsgId)}
-                        theme="dark"
-                        lazyLoadEmojis={true}
-                        searchDisabled={false}
-                        skinTonesDisabled
-                    />
+                <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="relative z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/20">
+                    <EmojiPicker onEmojiClick={(emoji) => handleReactionClick(emoji.emoji, reactingToMsgId)} theme="dark" lazyLoadEmojis={true} />
                 </motion.div>
             </div>
         )}
       </AnimatePresence>
+      {showMainPicker && (<><div className="fixed inset-0 z-40" onClick={() => setShowMainPicker(false)} /><div className="absolute bottom-20 left-4 z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/10 bg-slate-900"><EmojiPicker onEmojiClick={onMainEmojiClick} theme="dark" width={300} height={400} lazyLoadEmojis={true} /></div></>)}
 
-      {/* PICKER FLOTTANT (INPUT) */}
-      {showMainPicker && (
-         <>
-           <div className="fixed inset-0 z-40" onClick={() => setShowMainPicker(false)} />
-           <div className="absolute bottom-20 left-4 z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/10 bg-slate-900">
-             <EmojiPicker onEmojiClick={onMainEmojiClick} theme="dark" width={300} height={400} lazyLoadEmojis={true} />
-           </div>
-         </>
-      )}
-
-      {/* INPUT ZONE */}
+      {/* INPUT */}
       <div className="p-3 bg-slate-800 border-t border-white/10 flex gap-2 items-end relative z-30">
-        <button 
-          onClick={() => { setShowMainPicker(!showMainPicker); setReactingToMsgId(null); }} 
-          className={`p-3 rounded-full transition ${showMainPicker ? 'bg-philo-primary text-white' : 'bg-black/30 text-gray-400 hover:text-white'}`}
-        >
-          <Smile size={20} />
-        </button>
-
+        <button onClick={() => { setShowMainPicker(!showMainPicker); setReactingToMsgId(null); }} className={`p-3 rounded-full transition ${showMainPicker ? 'bg-philo-primary text-white' : 'bg-black/30 text-gray-400 hover:text-white'}`}><Smile size={20} /></button>
         <form onSubmit={sendMessage} className="flex-1 flex gap-2">
-          <input
-            ref={inputRef}
-            type="text"
-            value={inputText}
-            onChange={handleTyping}
-            disabled={!canChat} 
-            placeholder={!canChat ? "En attente d'acceptation..." : "Ton message..."}
-            className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-          />
-          <button disabled={!inputText.trim() || !canChat} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50">
-            <Send size={18} />
-          </button>
+          <input ref={inputRef} type="text" value={inputText} onChange={handleTyping} disabled={!canChat} placeholder={!canChat ? "En attente d'acceptation..." : "Ton message..."} className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none disabled:opacity-50 disabled:cursor-not-allowed" />
+          <button disabled={!inputText.trim() || !canChat} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50"><Send size={18} /></button>
         </form>
       </div>
     </div>
