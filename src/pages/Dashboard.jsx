@@ -328,26 +328,30 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
 
 
 // --- SIDEBAR INTELLIGENTE ---
-const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
-  const [view, setView] = useState('PROFILE')
+const UserProfileSidebar = ({ userId, onClose, similarity, onChatStatusChange }) => {
+  const [view, setView] = useState('PROFILE') // 'PROFILE' ou 'CHAT'
   const [profile, setProfile] = useState(null)
   const [answers, setAnswers] = useState([])
   const [connection, setConnection] = useState(null)
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  // 1. Initialisation des données
   useEffect(() => {
     const init = async () => {
       setLoading(true)
       const { data: { user } } = await supabase.auth.getUser()
       setCurrentUser(user)
 
+      // Profil Cible
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).single()
       setProfile(prof)
 
+      // Vibe (Questions)
       const { data: ans } = await supabase.from('user_answers').select('question_id, questions(text), options(text)').eq('user_id', userId)
       setAnswers(ans || [])
 
+      // Connexion existante ?
       const { data: conn } = await supabase
         .from('connections')
         .select('*')
@@ -360,7 +364,16 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
     if (userId) init()
   }, [userId])
 
-  // Fonction utilisée par le ChatInterface pour créer le lien via message
+  // 2. Gestion du statut "En train de chatter" pour les notifications
+  // Quand on démonte le composant ou qu'on change d'user, on dit qu'on arrête de chatter
+  useEffect(() => {
+    return () => {
+      if (onChatStatusChange) onChatStatusChange(userId, false)
+    }
+  }, [userId, onChatStatusChange])
+
+  // --- ACTIONS LOGIQUES ---
+
   const handleCreateConnection = async (firstMessage) => {
     const { data: newConn, error: connError } = await supabase
       .from('connections')
@@ -385,7 +398,6 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
     return newConn
   }
 
-  // Fonction pour le bouton "Demander un lien" (sans message texte explicite)
   const handleSimpleLinkRequest = async () => {
     const { data: newConn, error } = await supabase
       .from('connections')
@@ -393,7 +405,7 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
         sender_id: currentUser.id,
         receiver_id: userId,
         status: 'pending',
-        message: "👋 Demande de connexion" // Message système par défaut
+        message: "👋 Demande de connexion"
       })
       .select()
       .single()
@@ -408,10 +420,6 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
     setConnection(data)
   }
 
-  const isAccepted = connection?.status === 'accepted'
-  const isReceiver = connection?.receiver_id === currentUser?.id
-
-  // Rompre le lien (Uniquement si accepté)
   const handleBreakLink = async () => {
     if (window.confirm("Es-tu sûr de vouloir couper le lien ? L'historique et les infos seront perdus.")) {
       const { error } = await supabase
@@ -427,10 +435,29 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
       }
     }
   }
+
+  // --- NAVIGATION CHAT / PROFIL ---
+
   const openChat = () => {
     setView('CHAT')
-    if (onOpenChat) onOpenChat(userId) // <--- C'est ici que ça reset la notif
+    // On prévient le Dashboard qu'on discute avec CETTE personne (bloque les notifs)
+    if (onChatStatusChange) onChatStatusChange(userId, true)
   }
+
+  const handleBackToProfile = () => {
+    setView('PROFILE')
+    // On prévient le Dashboard qu'on a arrêté de discuter (réactive les notifs)
+    if (onChatStatusChange) onChatStatusChange(userId, false)
+  }
+
+  const handleClose = () => {
+    // Sécurité supplémentaire à la fermeture
+    if (onChatStatusChange) onChatStatusChange(userId, false)
+    onClose()
+  }
+
+  const isAccepted = connection?.status === 'accepted'
+  const isReceiver = connection?.receiver_id === currentUser?.id
 
   return (
     <motion.div
@@ -438,17 +465,20 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
       transition={{ type: "spring", damping: 25, stiffness: 200 }}
       className="fixed inset-y-0 right-0 w-full md:w-96 bg-slate-900/95 backdrop-blur-xl border-l border-white/10 shadow-2xl z-50 overflow-hidden flex flex-col"
     >
+      {/* --- VUE CHAT --- */}
       {view === 'CHAT' ? (
         <ChatInterface 
           currentUser={currentUser} 
           targetUser={profile} 
           connection={connection}
-          onBack={() => setView('PROFILE')}
+          onBack={handleBackToProfile} // On utilise la fonction qui gère le statut
           onCreateConnection={handleCreateConnection}
         />
       ) : (
         
+        /* --- VUE PROFIL --- */
         <div className="flex flex-col h-full overflow-y-auto">
+          
           {/* Header Profil */}
           <div className="sticky top-0 bg-slate-900/90 backdrop-blur-md border-b border-white/10 p-4 flex justify-between items-center z-10">
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
@@ -468,7 +498,7 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
                 </button>
               )}
 
-              <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition">
+              <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-full transition">
                 <X size={24} />
               </button>
             </div>
@@ -477,7 +507,7 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
           {loading ? (
             <div className="p-8 text-center text-gray-400">Scan en cours...</div>
           ) : (
-            <div className="p-6 space-y-8 pb-32"> {/* pb-32 pour laisser la place aux boutons en bas */}
+            <div className="p-6 space-y-8 pb-32"> {/* Marge pour la barre d'action */}
               
               {/* IDENTITÉ */}
               <div className="text-center relative">
@@ -490,7 +520,7 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
                   <Sparkles size={12}/> {Math.round(similarity * 100)}% Compatible
                 </div>
 
-                {/* INFOS FLOUTÉES */}
+                {/* INFOS (Floutées ou non) */}
                 <div className="mt-6 grid grid-cols-2 gap-2 text-sm">
                   <div className={`p-3 rounded-xl border border-white/5 ${isAccepted ? 'bg-white/5' : 'bg-black/40 blur-sm select-none'}`}>
                     <span className="block text-gray-500 text-[10px] uppercase">Campus</span>
@@ -535,7 +565,7 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
               {/* BARRE D'ACTION (FIXE EN BAS) */}
               <div className="fixed bottom-0 right-0 w-full md:w-96 p-4 bg-slate-900 border-t border-white/10 backdrop-blur-xl flex flex-col gap-3">
                 
-                {/* CAS 1 : AUCUN LIEN (Montrer les 2 boutons) */}
+                {/* CAS 1 : AUCUN LIEN */}
                 {!connection && (
                   <>
                      <button 
@@ -553,14 +583,14 @@ const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
                   </>
                 )}
 
-                {/* CAS 2 : DEMANDE ENVOYÉE (Pending) PAR MOI */}
+                {/* CAS 2 : DEMANDE ENVOYÉE PAR MOI (Attente) */}
                 {connection && connection.status === 'pending' && !isReceiver && (
                   <div className="w-full py-3 bg-white/5 rounded-xl text-gray-400 font-bold flex items-center justify-center gap-2 border border-white/10 cursor-not-allowed">
                      <Clock size={20} /> En attente...
                   </div>
                 )}
 
-                {/* CAS 3 : DEMANDE REÇUE (Pending) PAR L'AUTRE */}
+                {/* CAS 3 : DEMANDE REÇUE (À accepter) */}
                 {connection && connection.status === 'pending' && isReceiver && (
                   <button onClick={handleAccept} className="w-full py-3 bg-green-500 hover:bg-green-600 rounded-xl text-black font-bold flex items-center justify-center gap-2 shadow-lg shadow-green-500/20">
                     <CheckCircle size={20} /> Accepter le lien
@@ -599,7 +629,8 @@ export default function Dashboard() {
   const [selectedUser, setSelectedUser] = useState(null)
   const [unreadCounts, setUnreadCounts] = useState({})
 
-  const myProfileRef = useRef(null) 
+ const activeChatRef = useRef(null) // Stocke l'ID de l'ami avec qui on chatte (ou null)
+  const myProfileRef = useRef(null)
 
   useEffect(() => {
     myProfileRef.current = myProfile
@@ -686,14 +717,17 @@ export default function Dashboard() {
             const me = myProfileRef.current
             if (!me) return
 
-            // CORRECTION IMPORTANTE : On ignore strictement si JE suis l'expéditeur
+            // Si c'est moi qui envoie, on ignore
             if (payload.new.sender_id === me.id) return;
 
-            // Logique pour trouver qui m'a envoyé ça
-            // Si sender_id est directement l'ID de l'autre user :
             const senderId = payload.new.sender_id;
 
-            // On met à jour le compteur UNIQUEMENT pour cet ID
+            // --- NOUVELLE LIGNE MAGIQUE ---
+            // Si l'expéditeur est celui avec qui je suis en train de chatter, ON ARRÊTE TOUT.
+            // Pas de notif, pas de compteur.
+            if (activeChatRef.current === senderId) return; 
+            // -----------------------------
+
             setUnreadCounts(prev => ({
                  ...prev,
                  [senderId]: (prev[senderId] || 0) + 1
@@ -706,6 +740,16 @@ export default function Dashboard() {
         supabase.removeChannel(messageChannel)
     }
   }, [])
+
+  const handleChatStatusChange = (userId, isChatting) => {
+    if (isChatting) {
+      activeChatRef.current = userId
+      // On en profite pour reset le compteur visuel immédiatement
+      setUnreadCounts(prev => ({ ...prev, [userId]: 0 }))
+    } else {
+      activeChatRef.current = null
+    }
+  }
 
   // 3. FONCTION DE RESET (Passée à la Sidebar)
   const handleOpenChat = (userId) => {
@@ -818,12 +862,12 @@ export default function Dashboard() {
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedUser(null)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
             
-            {/* ON PASSE LA FONCTION DE RESET ICI */}
             <UserProfileSidebar 
               userId={selectedUser.id} 
               similarity={selectedUser.similarity} 
               onClose={() => setSelectedUser(null)} 
-              onOpenChat={handleOpenChat} 
+              // C'est ici qu'on passe la nouvelle fonction de contrôle
+              onChatStatusChange={handleChatStatusChange} 
             />
           </>
         )}
