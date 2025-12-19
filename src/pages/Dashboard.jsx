@@ -95,39 +95,39 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     }
     fetchMessages()
 
-    // B. S'abonner aux changements (INSERT, UPDATE, DELETE)
+    // B. S'abonner aux changements
     channelRef.current = supabase.channel(`room:${connection.id}`)
 
     channelRef.current
       .on(
         'postgres_changes',
         {
-          event: '*', // On écoute TOUT
+          event: '*',
           schema: 'public',
           table: 'messages',
-          filter: `connection_id=eq.${connection.id}`
+          filter: `connection_id=eq.${connection.id}` // Ce filtre marche mnt grâce à l'étape 1
         },
         (payload) => {
-          // CAS 1 : NOUVEAU MESSAGE
+          console.log("Événement reçu :", payload) // <--- Regarde ta console si ça ne marche pas
+
+          // CAS 1 : INSERT
           if (payload.eventType === 'INSERT') {
             setMessages((current) => {
-              // On évite les doublons si l'ajout optimiste a déjà eu lieu
               if (current.find(m => m.id === payload.new.id)) return current
               return [...current, payload.new]
             })
             setIsRemoteTyping(false)
           } 
-          // CAS 2 : MODIFICATION (UPDATE)
+          // CAS 2 : UPDATE
           else if (payload.eventType === 'UPDATE') {
             setMessages((current) => 
-              // On remplace le message qui a le même ID par la nouvelle version (payload.new)
               current.map(m => m.id === payload.new.id ? payload.new : m)
             )
           }
-          // CAS 3 : SUPPRESSION (DELETE)
+          // CAS 3 : DELETE (C'est ici que ça se joue)
           else if (payload.eventType === 'DELETE') {
+            console.log("Suppression détectée pour l'ID :", payload.old.id)
             setMessages((current) => 
-              // On garde tout SAUF celui qui a l'ID supprimé (payload.old.id)
               current.filter(m => m.id !== payload.old.id)
             )
           }
