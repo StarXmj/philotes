@@ -242,6 +242,8 @@ export default function Dashboard() {
             <UserProfileSidebar 
               userId={selectedUser.id} 
               similarity={selectedUser.similarity} 
+              // 👇 AJOUT ICI : On passe le nombre de messages non-lus
+              initialUnreadCount={unreadCounts[selectedUser.id] || 0}
               onClose={() => setSelectedUser(null)} 
               onChatStatusChange={handleChatStatusChange} 
             />
