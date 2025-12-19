@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from './lib/supabaseClient'
 import { Loader2 } from 'lucide-react'
 import Profile from './pages/Profile' // <-- Import
+import UpdatePassword from './pages/UpdatePassword' // <--- Import
 // Tes pages
 import Landing from './pages/Landing'
 import Onboarding from './pages/Onboarding'
@@ -106,7 +107,7 @@ function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/app" element={<Dashboard />} />
-            <Route path="/profile" element={<Profile />} /> {/* <-- Nouvelle route */}
+            <Route path="/update-password" element={<UpdatePassword />} />
           </Routes>
         </div>
       </AuthManager>

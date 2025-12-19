@@ -1,24 +1,19 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Mail, Lock, CheckCircle, ShieldCheck, Loader2, KeyRound, ArrowLeft } from 'lucide-react'
+import { Mail, Lock, CheckCircle, ShieldCheck, Loader2, ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
 export default function Landing() {
   const navigate = useNavigate()
-  
-  // Modes : 'login', 'signup', ou 'forgot'
   const [mode, setMode] = useState('login') 
-  
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [msg, setMsg] = useState(null) // Message de succès
+  const [msg, setMsg] = useState(null)
 
-  // --- CALCUL DE FORCE DU MOT DE PASSE ---
   const getPasswordStrength = (pass) => {
     let score = 0
     if (!pass) return 0
@@ -44,7 +39,6 @@ export default function Landing() {
     return 'Fort 💪'
   }
 
-  // --- GESTION DES SOUMISSIONS ---
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
@@ -59,7 +53,8 @@ export default function Landing() {
         }
 
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          redirectTo: window.location.origin + '/profile', // Redirige vers le profil pour changer le MDP
+          // C'EST ICI LA MODIFICATION IMPORTANTE :
+          redirectTo: window.location.origin + '/update-password', 
         })
 
         if (error) throw error
@@ -99,7 +94,6 @@ export default function Landing() {
     }
   }
 
-  // --- ÉCRAN DE SUCCÈS (Message temporaire) ---
   if (msg) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-philo-dark px-4">
@@ -115,7 +109,6 @@ export default function Landing() {
     )
   }
 
-  // --- RENDU PRINCIPAL ---
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-philo-dark px-4 relative overflow-hidden">
       <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-philo-primary/30 rounded-full blur-[100px]" />
@@ -134,7 +127,6 @@ export default function Landing() {
 
         <div className="bg-white/5 backdrop-blur-xl p-8 rounded-3xl border border-white/10 shadow-2xl relative overflow-hidden">
           
-          {/* Onglets (Cachés si mode 'forgot') */}
           {mode !== 'forgot' && (
             <div className="flex bg-black/20 rounded-xl p-1 mb-6">
                 <button onClick={() => setMode('login')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'login' ? 'bg-white/10 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}>Connexion</button>
@@ -142,7 +134,6 @@ export default function Landing() {
             </div>
           )}
 
-          {/* Bouton Retour (Visible seulement si 'forgot') */}
           {mode === 'forgot' && (
              <button onClick={() => setMode('login')} className="mb-6 flex items-center gap-2 text-sm text-gray-400 hover:text-white transition">
                 <ArrowLeft size={16} /> Retour
@@ -151,13 +142,11 @@ export default function Landing() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             
-            {/* Email (Toujours visible) */}
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Mail className="h-5 w-5 text-gray-500" /></div>
               <input type="email" required placeholder="Email étudiant (@univ...)" className="block w-full pl-10 pr-3 py-3 border border-white/10 rounded-xl bg-black/20 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-philo-primary transition-all" value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
 
-            {/* Mot de passe (Caché si mode 'forgot') */}
             {mode !== 'forgot' && (
                 <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Lock className="h-5 w-5 text-gray-500" /></div>
@@ -165,7 +154,6 @@ export default function Landing() {
                 </div>
             )}
 
-            {/* Lien Mot de passe oublié (Visible seulement en Login) */}
             {mode === 'login' && (
                 <div className="flex justify-end">
                     <button type="button" onClick={() => setMode('forgot')} className="text-xs text-philo-primary hover:text-philo-secondary hover:underline transition">
@@ -174,7 +162,6 @@ export default function Landing() {
                 </div>
             )}
 
-            {/* Jauge et Confirmation (Visible seulement en Signup) */}
             <AnimatePresence>
                 {mode === 'signup' && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="space-y-4 overflow-hidden">
