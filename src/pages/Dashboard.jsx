@@ -1,7 +1,7 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react' // <-- AJOUT DE useCallback
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
-import { User, LogOut, UserCircle, Clock, Zap } from 'lucide-react' // J'ai ajouté Zap pour le style
+import { User, LogOut, UserCircle, Clock } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import UserProfileSidebar from '../components/dashboard/UserProfileSidebar'
 
@@ -13,9 +13,6 @@ export default function Dashboard() {
   const [selectedUser, setSelectedUser] = useState(null)
   const [unreadCounts, setUnreadCounts] = useState({})
   
-  // --- NOUVEAU : État de présence ---
-  const [onlineUsers, setOnlineUsers] = useState({}) 
-
   const activeChatRef = useRef(null) 
   const myProfileRef = useRef(null)
 
@@ -23,7 +20,7 @@ export default function Dashboard() {
     myProfileRef.current = myProfile
   }, [myProfile])
 
-  // 1. CHARGEMENT (Données statiques)
+  // 1. CHARGEMENT
   const fetchData = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return navigate('/')
@@ -71,15 +68,11 @@ export default function Dashboard() {
     fetchData()
   }, [navigate])
 
-  // 2. TEMPS RÉEL & PRÉSENCE (Le cœur du système)
+  // 2. TEMPS RÉEL (VERSION STABLE)
   useEffect(() => {
-    const userId = myProfileRef.current?.id
-    
-    // A. Canal UNIQUE pour tout gérer (c'est plus propre)
     const channel = supabase.channel('dashboard-room')
 
     channel
-      // --- Écoute des Connexions (Amis) ---
       .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
           const me = myProfileRef.current
           if (!me) return
@@ -91,11 +84,9 @@ export default function Dashboard() {
 
           setMatches(currentMatches => {
             return currentMatches.map(match => {
-              // Mise à jour si c'est ce match concerné
               if (payload.new && (payload.new.sender_id === match.id || payload.new.receiver_id === match.id)) {
                 return { ...match, connection: payload.new }
               }
-              // Gestion suppression
               if (payload.eventType === 'DELETE' && (payload.old.sender_id === match.id || payload.old.receiver_id === match.id)) {
                  return { ...match, connection: null }
               }
@@ -103,7 +94,6 @@ export default function Dashboard() {
             })
           })
       })
-      // --- Écoute des Messages (Notifs) ---
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
           const me = myProfileRef.current
           if (!me) return
@@ -113,47 +103,33 @@ export default function Dashboard() {
           const senderId = String(payload.new.sender_id)
           const currentActiveChat = activeChatRef.current ? String(activeChatRef.current) : null
 
-          // LE FIX BUG N°4 EST ICI :
+          // DEBUG : Pour vérifier que ça marche
+          // console.log(`Notif check: Sender=${senderId}, Active=${currentActiveChat}`)
+
           if (currentActiveChat === senderId) return 
 
           setUnreadCounts(prev => ({ ...prev, [senderId]: (prev[senderId] || 0) + 1 }))
       })
-      // --- Écoute de la PRÉSENCE (Nouveau !) ---
-      .on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState()
-        const onlineIds = {}
-        
-        // On transforme l'état complexe de Supabase en un objet simple { id: true }
-        for (const key in state) {
-          state[key].forEach(userPresence => {
-             if (userPresence.user_id) onlineIds[userPresence.user_id] = true
-          })
-        }
-        setOnlineUsers(onlineIds)
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          // On s'annonce comme "En ligne"
-          const { data: { user } } = await supabase.auth.getUser()
-          if (user) {
-            await channel.track({ user_id: user.id, online_at: new Date().toISOString() })
-          }
-        }
-      })
+      .subscribe()
 
     return () => { 
         supabase.removeChannel(channel)
     }
-  }, [loading]) // On attend que loading soit fini pour avoir le user
+  }, []) // Plus de dépendance 'loading' inutile ici
 
-  const handleChatStatusChange = (userId, isChatting) => {
+  // --- LE FIX EST ICI : useCallback ---
+  const handleChatStatusChange = useCallback((userId, isChatting) => {
     if (isChatting) {
       activeChatRef.current = String(userId) 
+      // On nettoie les notifs immédiatement quand on ouvre le chat
       setUnreadCounts(prev => ({ ...prev, [userId]: 0 }))
     } else {
-      activeChatRef.current = null
+      // On ne reset activeChatRef QUE si c'est l'utilisateur actuel qu'on quitte
+      if (activeChatRef.current === String(userId)) {
+        activeChatRef.current = null
+      }
     }
-  }
+  }, [])
 
   const handleLogout = async () => await supabase.auth.signOut() 
 
@@ -182,8 +158,6 @@ export default function Dashboard() {
         <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="z-20 w-24 h-24 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary flex flex-col items-center justify-center shadow-[0_0_40px_rgba(139,92,246,0.6)] border-4 border-philo-dark relative">
           <span className="text-2xl">😎</span>
           <span className="text-xs font-bold mt-1">{myProfile?.pseudo || 'Moi'}</span>
-          {/* Indicateur Moi (toujours vert) */}
-          <div className="absolute bottom-1 right-1 w-4 h-4 bg-green-500 border-2 border-philo-dark rounded-full"></div>
         </motion.div>
 
         {/* Les Autres Planètes */}
@@ -201,7 +175,6 @@ export default function Dashboard() {
             
             const unread = unreadCounts[match.id] || 0
             const hasNotif = unread > 0
-            const isOnline = onlineUsers[match.id] // <--- VÉRIFICATION PRÉSENCE
 
             if (isAccepted) {
                 containerClass = "border-philo-primary bg-philo-primary/10 shadow-[0_0_15px_rgba(139,92,246,0.3)]"
@@ -244,14 +217,6 @@ export default function Dashboard() {
                   </div>
 
                   {badge}
-                  
-                  {/* --- INDICATEUR DE PRÉSENCE (PASTILLE VERTE) --- */}
-                  {isOnline && (
-                    <span className="absolute top-1 right-1 flex h-3 w-3">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500 border-2 border-slate-900"></span>
-                    </span>
-                  )}
 
                   {/* Compteur Non-lus */}
                   {hasNotif && (
