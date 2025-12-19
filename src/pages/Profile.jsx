@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { motion } from 'framer-motion'
-import { ArrowLeft, Save, GraduationCap, MapPin, User, BrainCircuit, Loader2, Sparkles } from 'lucide-react'
+import { ArrowLeft, Save, GraduationCap, MapPin, User, BrainCircuit, Loader2, Sparkles, Lock, Eye, EyeOff, KeyRound, ShieldCheck, AlertCircle, CheckCircle } from 'lucide-react'
 
 const CAMPUS_LIST = ["Pau", "Bayonne", "Anglet", "Tarbes", "Mont-de-Marsan"]
 
@@ -12,12 +12,12 @@ export default function Profile() {
   const [saving, setSaving] = useState(false)
   const [user, setUser] = useState(null)
 
-  // États du formulaire
+  // --- ÉTATS DU PROFIL (GÉNÉRAL) ---
   const [pseudo, setPseudo] = useState('')
   const [sexe, setSexe] = useState('')
   const [birthDate, setBirthDate] = useState('')
   
-  // États Scolaires
+  // --- ÉTATS SCOLAIRES ---
   const [formationsData, setFormationsData] = useState([])
   const [selectedEtude, setSelectedEtude] = useState('')
   const [selectedTheme, setSelectedTheme] = useState('')
@@ -26,8 +26,41 @@ export default function Profile() {
   const [selectedParcours, setSelectedParcours] = useState('')
   const [selectedLieu, setSelectedLieu] = useState('')
 
-  // États Réponses Quiz (Structure: { question: string, answer: string })
+  // --- ÉTATS VIBES (QUIZ) ---
   const [myVibes, setMyVibes] = useState([])
+
+  // --- ÉTATS SÉCURITÉ (MOT DE PASSE) ---
+  const [isEditingPassword, setIsEditingPassword] = useState(false)
+  const [passwordData, setPasswordData] = useState({ new: '', confirm: '' })
+  const [showPassword, setShowPassword] = useState(false)
+  const [passMessage, setPassMessage] = useState({ type: '', text: '' })
+  const [passLoading, setPassLoading] = useState(false)
+
+  // --- LOGIQUE DE FORCE DU MOT DE PASSE (COPIÉE DE LANDING) ---
+  const getPasswordStrength = (pass) => {
+    let score = 0
+    if (!pass) return 0
+    if (pass.length > 5) score += 1
+    if (pass.length > 8) score += 1
+    if (/[0-9]/.test(pass)) score += 1
+    if (/[^A-Za-z0-9]/.test(pass)) score += 1
+    return score
+  }
+
+  const strength = getPasswordStrength(passwordData.new)
+
+  const getStrengthColor = () => {
+    if (strength === 0) return 'bg-gray-600'
+    if (strength <= 2) return 'bg-red-500'
+    if (strength === 3) return 'bg-yellow-500'
+    return 'bg-green-500'
+  }
+
+  const getStrengthLabel = () => {
+    if (strength <= 2) return 'Faible'
+    if (strength === 3) return 'Moyen'
+    return 'Fort 💪'
+  }
 
   // 1. CHARGEMENT
   useEffect(() => {
@@ -36,12 +69,7 @@ export default function Profile() {
       if (!user) return navigate('/')
       setUser(user)
 
-      // A. Récupérer le profil principal
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', user.id)
-        .single()
+      const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
 
       if (profile) {
         setPseudo(profile.pseudo || '')
@@ -55,26 +83,13 @@ export default function Profile() {
         setSelectedLieu(profile.etudes_lieu || '')
       }
 
-      // B. Récupérer les Réponses AVEC les Questions
-      const { data: answers } = await supabase
-        .from('user_answers')
-        .select(`
-          question_id,
-          questions ( text ), 
-          options ( text )
-        `)
-        .eq('user_id', user.id)
+      const { data: answers } = await supabase.from('user_answers').select(`question_id,questions(text),options(text)`).eq('user_id', user.id)
       
       if (answers) {
-        // On formate les données pour l'affichage
-        const formattedVibes = answers.map(a => ({
-          question: a.questions?.text,
-          answer: a.options?.text
-        }))
+        const formattedVibes = answers.map(a => ({ question: a.questions?.text, answer: a.options?.text }))
         setMyVibes(formattedVibes)
       }
 
-      // C. Récupérer les formations
       const { data: form } = await supabase.from('formations').select('*')
       setFormationsData(form || [])
       
@@ -83,67 +98,81 @@ export default function Profile() {
     loadProfile()
   }, [navigate])
 
-  // --- LOGIQUE FILTRES ---
   const etudesOpts = [...new Set(formationsData.map(f => f.etude))].filter(Boolean).sort()
   const themesOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude).map(f => f.theme))].filter(Boolean).sort()
   const anneesOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude && f.theme === selectedTheme).map(f => f.annee))].filter(Boolean).sort()
   const nomsOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude && f.theme === selectedTheme && f.annee === selectedAnnee).map(f => f.nom))].filter(Boolean).sort()
   const parcoursOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude && f.theme === selectedTheme && f.annee === selectedAnnee && f.nom === selectedNom).map(f => f.parcours))].filter(Boolean).sort()
 
-  // --- SAUVEGARDE ---
-  const handleSave = async (e) => {
+  const handleSaveProfile = async (e) => {
     e.preventDefault()
     setSaving(true)
-
-    const { error } = await supabase
-      .from('profiles')
-      .update({
+    const { error } = await supabase.from('profiles').update({
         pseudo, sexe, date_naissance: birthDate,
         type_diplome: selectedEtude, domaine: selectedTheme, annee_etude: selectedAnnee,
         intitule: selectedNom, parcours: selectedParcours || null, etudes_lieu: selectedLieu
-      })
-      .eq('id', user.id)
+      }).eq('id', user.id)
 
-    if (error) { alert("Erreur sauvegarde") } 
-    else { navigate('/app') }
+    if (error) { alert("Erreur lors de la sauvegarde du profil") } else { navigate('/app') }
     setSaving(false)
   }
 
-  const handleRetakeQuiz = () => {
-    navigate('/onboarding', { state: { mode: 'edit' } })
+  const handleUpdatePassword = async (e) => {
+    e.preventDefault()
+    setPassMessage({ type: '', text: '' })
+
+    if (strength < 2) {
+        setPassMessage({ type: 'error', text: 'Le mot de passe est trop faible.' })
+        return
+    }
+    if (passwordData.new !== passwordData.confirm) {
+      setPassMessage({ type: 'error', text: 'Les mots de passe ne correspondent pas.' })
+      return
+    }
+
+    setPassLoading(true)
+    const { error } = await supabase.auth.updateUser({ password: passwordData.new })
+
+    if (error) {
+      setPassMessage({ type: 'error', text: error.message })
+    } else {
+      setPassMessage({ type: 'success', text: "Mot de passe mis à jour !" })
+      setIsEditingPassword(false)
+      setPasswordData({ new: '', confirm: '' })
+    }
+    setPassLoading(false)
   }
 
+  const handleRetakeQuiz = () => navigate('/onboarding', { state: { mode: 'edit' } })
   const selectStyle = "w-full p-3 rounded-xl bg-slate-800 border border-slate-600 text-white focus:border-philo-primary focus:outline-none appearance-none cursor-pointer placeholder-gray-400"
 
   if (loading) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white"><Loader2 className="animate-spin mr-2"/> Chargement...</div>
 
   return (
-    <div className="min-h-screen bg-philo-dark p-6 md:p-10 text-white">
-      <div className="max-w-3xl mx-auto">
+    <div className="min-h-screen bg-philo-dark p-6 md:p-10 text-white pb-32">
+      <div className="max-w-3xl mx-auto space-y-8">
         
-        {/* Header */}
-        <div className="flex items-center gap-4 mb-8">
+        <div className="flex items-center gap-4">
           <button onClick={() => navigate('/app')} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition">
             <ArrowLeft size={20} />
           </button>
           <h1 className="text-3xl font-bold">Mon Profil</h1>
         </div>
 
-        <form onSubmit={handleSave} className="space-y-8">
-          
-          {/* 1. INFOS PERSO */}
-          <div className="bg-white/5 p-6 rounded-3xl border border-white/10 shadow-lg">
+        {/* --- FORMULAIRE PRINCIPAL --- */}
+        <form id="main-profile-form" onSubmit={handleSaveProfile} className="space-y-8">
+          {/* ... (Partie Infos Perso & Fac inchangée) ... */}
+           {/* 1. INFOS PERSO */}
+           <div className="bg-white/5 p-6 rounded-3xl border border-white/10 shadow-lg">
             <div className="flex items-center gap-2 mb-6 text-philo-primary">
               <User size={24} />
               <h2 className="font-bold uppercase text-sm tracking-wider">Moi</h2>
             </div>
-            
             <div className="grid gap-6">
               <div>
                 <label className="text-xs text-gray-400 uppercase block mb-1">Pseudo</label>
                 <input type="text" required value={pseudo} onChange={e => setPseudo(e.target.value)} className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:border-philo-primary focus:outline-none" />
               </div>
-              
               <div className="flex gap-4">
                 <div className="w-1/2">
                   <label className="text-xs text-gray-400 uppercase block mb-1">Genre</label>
@@ -165,7 +194,6 @@ export default function Profile() {
               <GraduationCap size={24} />
               <h2 className="font-bold uppercase text-sm tracking-wider">Ma Fac</h2>
             </div>
-
             <div className="space-y-4">
                <div>
                   <label className="text-xs text-gray-400 block mb-1">Diplôme</label>
@@ -173,7 +201,6 @@ export default function Profile() {
                     {etudesOpts.map(o => <option key={o} value={o}>{o}</option>)}
                   </select>
                </div>
-               
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                  <div>
                     <label className="text-xs text-gray-400 block mb-1">Domaine</label>
@@ -188,14 +215,12 @@ export default function Profile() {
                     </select>
                  </div>
                </div>
-
                <div>
                   <label className="text-xs text-gray-400 block mb-1">Intitulé Exact</label>
                   <select required value={selectedNom} onChange={e => { setSelectedNom(e.target.value); setSelectedParcours(''); }} className={selectStyle}>
                     {nomsOpts.map(o => <option key={o} value={o}>{o}</option>)}
                   </select>
                </div>
-
                {parcoursOpts.length > 0 && (
                  <div>
                     <label className="text-xs text-gray-400 block mb-1">Option / Parcours</label>
@@ -205,7 +230,6 @@ export default function Profile() {
                     </select>
                  </div>
                )}
-
                <div>
                   <label className="text-xs text-gray-400 block mb-1 flex items-center gap-1"><MapPin size={12}/> Campus</label>
                   <select required value={selectedLieu} onChange={e => setSelectedLieu(e.target.value)} className={selectStyle}>
@@ -214,58 +238,124 @@ export default function Profile() {
                </div>
             </div>
           </div>
+        </form>
 
-          {/* 3. VIBES & PERSONNALITÉ (Affichage Détaillé) */}
-          <div className="bg-gradient-to-br from-purple-900/40 to-blue-900/40 p-6 rounded-3xl border border-white/10 shadow-lg">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-              <div className="flex items-center gap-2 text-purple-300">
-                <BrainCircuit size={24} />
-                <h2 className="font-bold uppercase text-sm tracking-wider">Ma Personnalité</h2>
-              </div>
-              <button 
-                type="button"
-                onClick={handleRetakeQuiz}
-                className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/50 rounded-xl text-xs font-bold text-purple-200 transition flex items-center gap-2"
-              >
-                <Sparkles size={14} /> Modifier mes réponses
-              </button>
+        {/* 3. VIBES & PERSONNALITÉ */}
+        <div className="bg-gradient-to-br from-purple-900/40 to-blue-900/40 p-6 rounded-3xl border border-white/10 shadow-lg">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+            <div className="flex items-center gap-2 text-purple-300">
+              <BrainCircuit size={24} />
+              <h2 className="font-bold uppercase text-sm tracking-wider">Ma Personnalité</h2>
             </div>
-            
-            {/* GRILLE DES QUESTIONS / RÉPONSES */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {myVibes.length > 0 ? (
-                myVibes.map((vibe, idx) => (
-                  <div key={idx} className="bg-black/30 border border-white/10 rounded-xl p-3">
-                    <p className="text-[10px] uppercase text-philo-primary font-bold mb-1 opacity-70">
-                      {vibe.question}
-                    </p>
-                    <p className="text-sm font-medium text-white">
-                      {vibe.answer}
-                    </p>
-                  </div>
-                ))
-              ) : (
-                <div className="col-span-2 text-gray-500 italic text-sm text-center py-4 bg-black/20 rounded-xl">
-                  Aucune donnée... Refais le quiz pour calibrer ton IA !
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* BOUTON SAVE */}
-          <div className="sticky bottom-6 pt-4">
-             <div className="absolute inset-0 bg-gradient-to-t from-philo-dark via-philo-dark to-transparent -z-10 h-24 -top-10" />
-            <button 
-              type="submit" 
-              disabled={saving}
-              className="w-full py-4 bg-gradient-to-r from-philo-primary to-philo-secondary rounded-2xl font-bold text-white shadow-xl hover:opacity-90 transition-all flex items-center justify-center gap-2"
-            >
-              {saving ? <Loader2 className="animate-spin"/> : <Save size={20} />}
-              Enregistrer les modifications
+            <button type="button" onClick={handleRetakeQuiz} className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/50 rounded-xl text-xs font-bold text-purple-200 transition flex items-center gap-2">
+              <Sparkles size={14} /> Modifier mes réponses
             </button>
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {myVibes.length > 0 ? (
+              myVibes.map((vibe, idx) => (
+                <div key={idx} className="bg-black/30 border border-white/10 rounded-xl p-3">
+                  <p className="text-[10px] uppercase text-philo-primary font-bold mb-1 opacity-70">{vibe.question}</p>
+                  <p className="text-sm font-medium text-white">{vibe.answer}</p>
+                </div>
+              ))
+            ) : (
+              <div className="col-span-2 text-gray-500 italic text-sm text-center py-4 bg-black/20 rounded-xl">Aucune donnée...</div>
+            )}
+          </div>
+        </div>
 
-        </form>
+        {/* 4. SÉCURITÉ (MOT DE PASSE) - AVEC JAUGE */}
+        <div className="bg-white/5 border border-white/10 rounded-3xl p-6 shadow-lg">
+            <div className="flex items-center gap-3 mb-4 text-red-400">
+                <ShieldCheck size={24} />
+                <h2 className="font-bold uppercase text-sm tracking-wider">Sécurité</h2>
+            </div>
+
+            {!isEditingPassword ? (
+                <button 
+                    type="button"
+                    onClick={() => setIsEditingPassword(true)}
+                    className="w-full flex items-center justify-between p-4 bg-black/20 hover:bg-black/40 border border-white/5 rounded-xl transition group"
+                >
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-white/5 rounded-lg text-gray-400 group-hover:text-white transition"><KeyRound size={20} /></div>
+                        <div className="text-left">
+                            <p className="font-bold text-sm text-gray-200">Mot de passe</p>
+                            <p className="text-xs text-gray-500">********</p>
+                        </div>
+                    </div>
+                    <span className="text-xs font-bold text-philo-primary bg-philo-primary/10 px-3 py-1 rounded-full border border-philo-primary/20">Modifier</span>
+                </button>
+            ) : (
+                <form onSubmit={handleUpdatePassword} className="bg-black/20 p-4 rounded-xl border border-white/10 space-y-4">
+                    <div className="flex justify-between items-center mb-2">
+                        <h3 className="font-bold text-sm text-white">Nouveau mot de passe</h3>
+                        <button type="button" onClick={() => setIsEditingPassword(false)} className="text-xs text-red-400 hover:underline">Annuler</button>
+                    </div>
+
+                    <div className="relative">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                        <input 
+                            type={showPassword ? "text" : "password"} placeholder="Nouveau mot de passe"
+                            value={passwordData.new} onChange={(e) => setPasswordData({...passwordData, new: e.target.value})}
+                            className="w-full bg-black/40 border border-white/10 rounded-lg py-3 pl-10 pr-10 text-sm text-white focus:border-philo-primary outline-none transition"
+                        />
+                         <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white">
+                            {showPassword ? <EyeOff size={16}/> : <Eye size={16}/>}
+                        </button>
+                    </div>
+
+                    {/* JAUGE DE FORCE (Ajouté ici) */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-[10px] text-gray-400 px-1">
+                        <span>Force</span>
+                        <span className={strength >= 3 ? "text-green-400" : "text-gray-400"}>{getStrengthLabel()}</span>
+                      </div>
+                      <div className="h-1.5 w-full bg-black/40 rounded-full overflow-hidden">
+                        <motion.div 
+                          className={`h-full ${getStrengthColor()}`}
+                          initial={{ width: 0 }}
+                          animate={{ width: `${(strength / 4) * 100}%` }}
+                          transition={{ duration: 0.3 }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="relative">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                        <input 
+                            type={showPassword ? "text" : "password"} placeholder="Confirmer le mot de passe"
+                            value={passwordData.confirm} onChange={(e) => setPasswordData({...passwordData, confirm: e.target.value})}
+                            className="w-full bg-black/40 border border-white/10 rounded-lg py-3 pl-10 pr-10 text-sm text-white focus:border-philo-primary outline-none transition"
+                        />
+                    </div>
+
+                    {passMessage.text && (
+                        <div className={`text-xs p-3 rounded-lg flex items-center gap-2 ${passMessage.type === 'error' ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'bg-green-500/20 text-green-300 border border-green-500/30'}`}>
+                            {passMessage.type === 'error' ? <AlertCircle size={14}/> : <CheckCircle size={14}/>}
+                            {passMessage.text}
+                        </div>
+                    )}
+
+                    <button 
+                        disabled={passLoading || !passwordData.new} type="submit" 
+                        className="w-full py-3 bg-red-500/80 hover:bg-red-500 rounded-lg font-bold text-white transition flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                        {passLoading ? 'Mise à jour...' : 'Enregistrer le mot de passe'}
+                    </button>
+                </form>
+            )}
+        </div>
+
+        <div className="sticky bottom-6 pt-4">
+           <div className="absolute inset-0 bg-gradient-to-t from-philo-dark via-philo-dark to-transparent -z-10 h-24 -top-10" />
+          <button type="submit" form="main-profile-form" disabled={saving} className="w-full py-4 bg-gradient-to-r from-philo-primary to-philo-secondary rounded-2xl font-bold text-white shadow-xl hover:opacity-90 transition-all flex items-center justify-center gap-2">
+            {saving ? <Loader2 className="animate-spin"/> : <Save size={20} />}
+            Enregistrer les modifications
+          </button>
+        </div>
+
       </div>
     </div>
   )
