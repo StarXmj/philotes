@@ -60,6 +60,7 @@ const MessageTimer = ({ createdAt }) => {
 }
 
 // --- COMPOSANT CHAT AVEC REALTIME ---
+// --- COMPOSANT CHAT AVEC REALTIME COMPLET ---
 const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateConnection }) => {
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
@@ -73,18 +74,17 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
   const channelRef = useRef(null)
   const typingTimeoutRef = useRef(null)
 
-  // Calcul du statut pour l'affichage header
   let statusLabel = "Aucun lien";
   if (connection?.status === 'pending') statusLabel = "En attente";
   if (connection?.status === 'accepted') statusLabel = "Lien actif ✨";
 
-  // Peut-on discuter ? (Oui si accepté, ou si pas de connexion du tout pour envoyer le 1er msg)
-  // Si c'est "pending", on bloque.
   const canChat = !connection || connection.status === 'accepted';
 
+  // 1. CHARGEMENT INITIAL + ÉCOUTE TEMPS RÉEL
   useEffect(() => {
     if (!connection?.id) return
 
+    // A. Charger l'historique
     const fetchMessages = async () => {
       const { data } = await supabase
         .from('messages')
@@ -95,32 +95,39 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     }
     fetchMessages()
 
+    // B. S'abonner aux changements (INSERT, UPDATE, DELETE)
     channelRef.current = supabase.channel(`room:${connection.id}`)
 
     channelRef.current
       .on(
         'postgres_changes',
         {
-          event: '*',
+          event: '*', // On écoute TOUT
           schema: 'public',
           table: 'messages',
           filter: `connection_id=eq.${connection.id}`
         },
         (payload) => {
+          // CAS 1 : NOUVEAU MESSAGE
           if (payload.eventType === 'INSERT') {
             setMessages((current) => {
+              // On évite les doublons si l'ajout optimiste a déjà eu lieu
               if (current.find(m => m.id === payload.new.id)) return current
               return [...current, payload.new]
             })
             setIsRemoteTyping(false)
           } 
+          // CAS 2 : MODIFICATION (UPDATE)
           else if (payload.eventType === 'UPDATE') {
             setMessages((current) => 
+              // On remplace le message qui a le même ID par la nouvelle version (payload.new)
               current.map(m => m.id === payload.new.id ? payload.new : m)
             )
           }
+          // CAS 3 : SUPPRESSION (DELETE)
           else if (payload.eventType === 'DELETE') {
             setMessages((current) => 
+              // On garde tout SAUF celui qui a l'ID supprimé (payload.old.id)
               current.filter(m => m.id !== payload.old.id)
             )
           }
@@ -138,25 +145,34 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     return () => { supabase.removeChannel(channelRef.current) }
   }, [connection, currentUser.id])
 
+  // Scroll automatique en bas
   useEffect(() => {
     if (!editingId) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
     }
   }, [messages, isRemoteTyping, editingId])
 
+  // --- ACTION : SUPPRIMER ---
   const handleDelete = async (msgId) => {
     if (window.confirm("Supprimer ce message ?")) {
-      setMessages((currentMessages) => 
-        currentMessages.filter((msg) => msg.id !== msgId)
-      )
+      
+      // 1. Mise à jour Optimiste (Visuel immédiat pour moi)
+      setMessages((current) => current.filter((msg) => msg.id !== msgId))
+
+      // 2. Appel Base de données (Déclenchera le Realtime pour l'autre)
       const { error } = await supabase
         .from('messages')
         .delete()
         .eq('id', msgId)
-      if (error) console.error("Erreur suppression:", error)
+      
+      if (error) {
+        console.error("Erreur suppression:", error)
+        // En cas d'erreur, on pourrait recharger les messages ici
+      }
     }
   }
 
+  // --- ACTION : COMMENCER L'ÉDITION ---
   const startEdit = (msg) => {
     setEditingId(msg.id)
     setEditText(msg.content)
@@ -167,14 +183,27 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     setEditText('')
   }
 
+  // --- ACTION : SAUVEGARDER L'ÉDITION ---
   const saveEdit = async () => {
-    if (!editText.trim()) return handleDelete(editingId)
-    await supabase
-      .from('messages')
-      .update({ content: editText })
-      .eq('id', editingId)
+    if (!editText.trim()) return handleDelete(editingId) // Vide = Supprimer
+    
+    const targetId = editingId
+    const newContent = editText
+
+    // 1. Mise à jour Optimiste (Visuel immédiat pour moi)
+    setMessages((current) => 
+      current.map(m => m.id === targetId ? { ...m, content: newContent } : m)
+    )
+
+    // Reset UI
     setEditingId(null)
     setEditText('')
+
+    // 2. Appel Base de données (Déclenchera le Realtime pour l'autre)
+    await supabase
+      .from('messages')
+      .update({ content: newContent })
+      .eq('id', targetId)
   }
 
   const handleTyping = (e) => {
@@ -193,7 +222,6 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     try {
       let currentConn = connection
       if (!currentConn) {
-        // C'est ici que l'envoi d'un message crée la demande de lien automatiquement
         currentConn = await onCreateConnection(text)
       } else {
         await supabase.from('messages').insert({
@@ -286,8 +314,6 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
           type="text"
           value={inputText}
           onChange={handleTyping}
-          // On désactive l'input si le lien est en attente (on ne peut pas discuter sans acceptation)
-          // SAUF si !connection (car c'est le moment d'envoyer le premier message)
           disabled={!canChat} 
           placeholder={!canChat ? "En attente d'acceptation..." : "Ton message..."}
           className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none disabled:opacity-50 disabled:cursor-not-allowed"
@@ -302,7 +328,7 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
 
 
 // --- SIDEBAR INTELLIGENTE ---
-const UserProfileSidebar = ({ userId, onClose, similarity }) => {
+const UserProfileSidebar = ({ userId, onClose, similarity, onOpenChat }) => {
   const [view, setView] = useState('PROFILE')
   const [profile, setProfile] = useState(null)
   const [answers, setAnswers] = useState([])
@@ -400,6 +426,10 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
         alert("Impossible de rompre le lien.")
       }
     }
+  }
+  const openChat = () => {
+    setView('CHAT')
+    if (onOpenChat) onOpenChat(userId) // <--- C'est ici que ça reset la notif
   }
 
   return (
@@ -515,7 +545,7 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
                       <UserPlus size={20} /> Demander un lien
                     </button>
                     <button 
-                      onClick={() => setView('CHAT')}
+                      onClick={openChat}
                       className="w-full py-3 bg-gradient-to-r from-philo-primary to-philo-secondary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20"
                     >
                       <MessageCircle size={20} /> Envoyer un message
@@ -540,7 +570,7 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
                 {/* CAS 4 : LIEN ACCEPTÉ */}
                 {connection && connection.status === 'accepted' && (
                    <button 
-                    onClick={() => setView('CHAT')}
+                    onClick={openChat}
                     className="w-full py-3 bg-philo-primary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2"
                   >
                     <MessageCircle size={20} /> Discuter
@@ -558,33 +588,129 @@ const UserProfileSidebar = ({ userId, onClose, similarity }) => {
 }
 
 // --- DASHBOARD (Inchangé) ---
+// ... (Gardez tous les imports et composants précédents : TypingIndicator, MessageTimer, ChatInterface, UserProfileSidebar)
+
+// --- DASHBOARD MODIFIÉ ---
 export default function Dashboard() {
   const navigate = useNavigate()
   const [matches, setMatches] = useState([])
   const [myProfile, setMyProfile] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [selectedUser, setSelectedUser] = useState(null) 
+  const [selectedUser, setSelectedUser] = useState(null)
+  const [unreadCounts, setUnreadCounts] = useState({})
+
+  const myProfileRef = useRef(null) 
 
   useEffect(() => {
-    const fetchMatches = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return navigate('/')
+    myProfileRef.current = myProfile
+  }, [myProfile])
 
-      const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-      setMyProfile(profile)
+  // 1. CHARGEMENT (Identique à avant)
+  const fetchData = async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return navigate('/')
 
-      if (profile && profile.embedding) {
-        const { data: matchedUsers } = await supabase.rpc('match_students', {
-          query_embedding: profile.embedding,
-          match_threshold: 0.5,
-          match_count: 6
+    const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+    setMyProfile(profile)
+    myProfileRef.current = profile
+
+    if (profile && profile.embedding) {
+      const { data: matchedUsers } = await supabase.rpc('match_students', {
+        query_embedding: profile.embedding,
+        match_threshold: 0.5,
+        match_count: 8
+      })
+
+      if (matchedUsers) {
+        const { data: allMyConnections } = await supabase
+          .from('connections')
+          .select('*')
+          .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
+
+        const matchesWithStatus = matchedUsers
+          .filter(p => p.id !== user.id)
+          .map(match => {
+            const conn = allMyConnections?.find(c => 
+              (c.sender_id === user.id && c.receiver_id === match.id) ||
+              (c.receiver_id === user.id && c.sender_id === match.id)
+            )
+            return { ...match, connection: conn || null }
+          })
+        
+        matchesWithStatus.sort((a, b) => {
+           const aIsFriend = a.connection?.status === 'accepted' ? 1 : 0
+           const bIsFriend = b.connection?.status === 'accepted' ? 1 : 0
+           return bIsFriend - aIsFriend
         })
-        setMatches(matchedUsers ? matchedUsers.filter(p => p.id !== user.id) : [])
+
+        setMatches(matchesWithStatus)
       }
-      setLoading(false)
     }
-    fetchMatches()
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    fetchData()
   }, [navigate])
+
+  // 2. TEMPS RÉEL (CORRIGÉ POUR LE DOUBLE COMPTE)
+  useEffect(() => {
+    // A. Connexions
+    const connectionChannel = supabase.channel('dashboard-connections')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
+          const me = myProfileRef.current
+          if (!me) return
+
+          const isInvolved = (payload.new && (payload.new.sender_id === me.id || payload.new.receiver_id === me.id)) ||
+                             (payload.old && (payload.old.sender_id === me.id || payload.old.receiver_id === me.id))
+
+          if (!isInvolved) return
+
+          setMatches(currentMatches => {
+            return currentMatches.map(match => {
+              if (payload.new && (payload.new.sender_id === match.id || payload.new.receiver_id === match.id)) {
+                return { ...match, connection: payload.new }
+              }
+              if (payload.eventType === 'DELETE' && (payload.old.sender_id === match.id || payload.old.receiver_id === match.id)) {
+                 return { ...match, connection: null }
+              }
+              return match
+            })
+          })
+        }
+      ).subscribe()
+
+    // B. Messages (CORRIGÉ)
+    const messageChannel = supabase.channel('dashboard-messages')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+            const me = myProfileRef.current
+            if (!me) return
+
+            // CORRECTION IMPORTANTE : On ignore strictement si JE suis l'expéditeur
+            if (payload.new.sender_id === me.id) return;
+
+            // Logique pour trouver qui m'a envoyé ça
+            // Si sender_id est directement l'ID de l'autre user :
+            const senderId = payload.new.sender_id;
+
+            // On met à jour le compteur UNIQUEMENT pour cet ID
+            setUnreadCounts(prev => ({
+                 ...prev,
+                 [senderId]: (prev[senderId] || 0) + 1
+            }))
+        }
+      ).subscribe()
+
+    return () => { 
+        supabase.removeChannel(connectionChannel) 
+        supabase.removeChannel(messageChannel)
+    }
+  }, [])
+
+  // 3. FONCTION DE RESET (Passée à la Sidebar)
+  const handleOpenChat = (userId) => {
+    setUnreadCounts(prev => ({ ...prev, [userId]: 0 }))
+  }
 
   const handleLogout = async () => await supabase.auth.signOut() 
 
@@ -593,7 +719,7 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-philo-dark text-white p-4 relative overflow-hidden">
       
-      <div className="flex justify-between items-center z-20 w-full max-w-4xl mx-auto py-4 px-4">
+      <div className="flex justify-between items-center z-20 w-full max-w-4xl mx-auto py-4 px-4 relative">
         <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
         <div className="flex gap-2">
           <button onClick={() => navigate('/profile')} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition"><UserCircle size={20} /></button>
@@ -601,37 +727,86 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="relative h-[600px] w-full flex items-center justify-center">
-        {/* MOI */}
-        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="z-20 w-24 h-24 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary flex flex-col items-center justify-center shadow-[0_0_30px_rgba(139,92,246,0.5)] border-4 border-philo-dark">
+      <div className="relative h-[600px] w-full flex items-center justify-center mt-10">
+        
+        {/* Guides visuels */}
+        <div className="absolute rounded-full border border-white/5 w-[260px] h-[260px]" />
+        <div className="absolute rounded-full border border-white/5 w-[480px] h-[480px]" />
+
+        {/* Moi */}
+        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="z-20 w-24 h-24 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary flex flex-col items-center justify-center shadow-[0_0_40px_rgba(139,92,246,0.6)] border-4 border-philo-dark">
           <span className="text-2xl">😎</span>
           <span className="text-xs font-bold mt-1">{myProfile?.pseudo || 'Moi'}</span>
         </motion.div>
 
-        {/* ORBITE */}
+        {/* Planètes */}
         {matches.map((match, index) => {
+            const conn = match.connection
+            const isAccepted = conn?.status === 'accepted'
+            
+            // Les amis proches (130px), les autres loin (240px)
+            const radius = isAccepted ? 130 : 240
             const angle = (index / matches.length) * 2 * Math.PI
-            const radius = 160 
             const x = Math.cos(angle) * radius
             const y = Math.sin(angle) * radius
+
+            let containerClass = "border-white/20 bg-white/10"
+            let badge = null
+            
+            const unread = unreadCounts[match.id] || 0
+            const hasNotif = unread > 0
+
+            if (isAccepted) {
+                containerClass = "border-philo-primary bg-philo-primary/10 shadow-[0_0_15px_rgba(139,92,246,0.3)]"
+                if (hasNotif) {
+                    containerClass = "border-red-500 bg-red-500/10 shadow-[0_0_20px_rgba(239,68,68,0.6)] animate-pulse"
+                }
+            } else if (conn?.status === 'pending') {
+                const isMeSender = conn.sender_id === myProfile?.id
+                if (isMeSender) {
+                    containerClass = "border-white/30 border-dashed bg-white/5"
+                    badge = <div className="absolute -top-1 -right-1 bg-gray-600 p-1 rounded-full"><Clock size={10}/></div>
+                } else {
+                    containerClass = "border-green-500 bg-green-500/10 shadow-[0_0_15px_rgba(34,197,94,0.4)]"
+                    badge = <div className="absolute -top-2 -right-2 bg-green-500 text-black text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-bounce">NEW</div>
+                }
+            }
 
             return (
               <motion.div
                 key={match.id}
                 initial={{ opacity: 0, x: 0, y: 0 }}
-                animate={{ opacity: 1, x: x, y: y }}
-                transition={{ delay: index * 0.1, type: 'spring' }}
+                animate={{ 
+                    opacity: 1, 
+                    x: x, 
+                    y: y,
+                    scale: hasNotif ? [1, 1.1, 1] : 1 
+                }}
+                transition={{ 
+                    type: 'spring', 
+                    scale: { repeat: hasNotif ? Infinity : 0, duration: 1.5 }
+                }}
                 className="absolute z-10 flex flex-col items-center cursor-pointer group"
-                whileHover={{ scale: 1.1 }}
-                onClick={() => setSelectedUser(match)}
+                onClick={() => setSelectedUser(match)} // <-- ON NE RESET PLUS ICI
               >
-                <div className="w-20 h-20 rounded-full bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center group-hover:bg-philo-primary/20 group-hover:border-philo-primary transition-colors relative">
-                  <User className="text-gray-300 group-hover:text-white" />
-                  <div className="absolute -top-2 -right-2 bg-green-500 text-black text-xs font-bold px-2 py-1 rounded-full">{Math.round(match.similarity * 100)}%</div>
+                <div className={`w-20 h-20 rounded-full backdrop-blur-md border-2 flex items-center justify-center transition-all relative ${containerClass}`}>
+                  <User className="text-gray-200" />
+                  
+                  <div className="absolute -bottom-2 bg-slate-900 border border-white/10 text-white text-[10px] font-bold px-2 py-0.5 rounded-full z-10">
+                    {Math.round(match.similarity * 100)}%
+                  </div>
+
+                  {badge}
+
+                  {hasNotif && (
+                      <div className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs shadow-lg animate-bounce z-20 border-2 border-slate-900">
+                          {unread > 9 ? '+9' : unread}
+                      </div>
+                  )}
                 </div>
-                <div className="mt-2 text-center">
-                  <p className="font-bold text-sm">{match.pseudo}</p>
-                  <p className="text-[10px] text-gray-400">{match.domaine || 'Étudiant'}</p>
+                
+                <div className="mt-3 text-center">
+                  <p className="font-bold text-sm text-shadow truncate max-w-[100px]">{match.pseudo}</p>
                 </div>
               </motion.div>
             )
@@ -642,7 +817,14 @@ export default function Dashboard() {
         {selectedUser && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedUser(null)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
-            <UserProfileSidebar userId={selectedUser.id} similarity={selectedUser.similarity} onClose={() => setSelectedUser(null)} />
+            
+            {/* ON PASSE LA FONCTION DE RESET ICI */}
+            <UserProfileSidebar 
+              userId={selectedUser.id} 
+              similarity={selectedUser.similarity} 
+              onClose={() => setSelectedUser(null)} 
+              onOpenChat={handleOpenChat} 
+            />
           </>
         )}
       </AnimatePresence>
