@@ -19,31 +19,36 @@ const TypingIndicator = () => (
 
 const MessageTimer = ({ createdAt }) => {
   const [timeLeft, setTimeLeft] = useState("")
+  
   useEffect(() => {
     const updateTimer = () => {
       const created = new Date(createdAt).getTime()
       const expire = created + MESSAGE_LIFETIME_HOURS * 60 * 60 * 1000
       const now = new Date().getTime()
       const diff = expire - now
-      if (diff <= 0) setTimeLeft("Expiré")
-      else {
+      
+      if (diff <= 0) {
+        setTimeLeft("Expiré")
+      } else {
         const h = Math.floor(diff / (1000 * 60 * 60))
         const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
         setTimeLeft(`${h}h ${m}m`)
       }
     }
+    
     updateTimer()
-    const interval = setInterval(updateTimer, 60000)
+    // Mise à jour toutes les 30 sec pour être plus précis
+    const interval = setInterval(updateTimer, 30000) 
     return () => clearInterval(interval)
   }, [createdAt])
+
   return <div className="text-[9px] opacity-60 flex items-center justify-end gap-1 mt-1 font-mono"><Clock size={10} /> {timeLeft}</div>
 }
 
-// --- LOGIQUE DE RÉACTIONS (Corrigée et Agrandie) ---
+// --- LOGIQUE DE RÉACTIONS ---
 const ReactionPills = ({ reactions, currentUserId, onToggle }) => {
   if (!reactions || reactions.length === 0) return null
 
-  // On groupe par emoji
   const groups = reactions.reduce((acc, r) => {
     if (!acc[r.emoji]) acc[r.emoji] = { count: 0, hasReacted: false }
     acc[r.emoji].count++
@@ -57,7 +62,7 @@ const ReactionPills = ({ reactions, currentUserId, onToggle }) => {
         <button
           key={emoji}
           onClick={(e) => {
-            e.stopPropagation(); // Empêche d'ouvrir le message ou autre
+            e.stopPropagation();
             onToggle(emoji);
           }}
           className={`text-sm px-2 py-1 rounded-full border flex items-center justify-center transition-all ${
@@ -66,7 +71,6 @@ const ReactionPills = ({ reactions, currentUserId, onToggle }) => {
               : 'bg-black/30 border-white/10 text-gray-400 hover:bg-white/10 hover:border-white/30'
           }`}
         >
-          {/* JUSTE L'EMOJI, Bien visible */}
           <span className="leading-none">{emoji}</span>
         </button>
       ))}
@@ -81,11 +85,11 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const [inputText, setInputText] = useState('')
   const [isRemoteTyping, setIsRemoteTyping] = useState(false)
   
-  // --- ÉTATS PICKER ---
+  // États Picker
   const [showMainPicker, setShowMainPicker] = useState(false)
   const [reactingToMsgId, setReactingToMsgId] = useState(null)
   
-  // --- ÉTATS PAGINATION & ÉDITION ---
+  // États Pagination & Édition
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [editingId, setEditingId] = useState(null)
@@ -96,7 +100,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const channelRef = useRef(null)
   const typingTimeoutRef = useRef(null)
   const scrollHeightRef = useRef(0)
-  const inputRef = useRef(null) // Pour remettre le focus
+  const inputRef = useRef(null)
 
   let statusLabel = "Aucun lien"
   if (connection?.status === 'pending') statusLabel = "En attente"
@@ -132,7 +136,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     }
   }
 
-  // 2. REALTIME
+  // 2. REALTIME (CORRIGÉ POUR UPDATE/DELETE)
   useEffect(() => {
     setMessages([])
     setHasMore(true)
@@ -142,6 +146,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
 
     channelRef.current = supabase.channel(`room:${connection.id}`)
     channelRef.current
+      // A. INSERT (Nouveau message)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
           const newMsg = { ...payload.new, message_reactions: [] }
           setMessages((current) => {
@@ -152,15 +157,24 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
           setTimeout(() => scrollToBottom(), 100)
         }
       )
+      // B. UPDATE (Modification - CORRIGÉ)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
-          setMessages((current) => current.map(m => m.id === payload.new.id ? { ...m, ...payload.new } : m))
+          setMessages((current) => current.map(m => {
+             if (m.id === payload.new.id) {
+                 // IMPORTANT : On fusionne (...m) pour GARDER les réactions existantes, 
+                 // et on écrase avec (...payload.new) pour le nouveau texte
+                 return { ...m, ...payload.new }
+             }
+             return m
+          }))
         }
       )
+      // C. DELETE (Suppression - CORRIGÉ)
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (payload) => {
           setMessages((current) => current.filter(m => m.id !== payload.old.id))
         }
       )
-      // ÉCOUTE DES RÉACTIONS (INSERT)
+      // D. REACTIONS (Insert)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions' }, (payload) => {
           setMessages((current) => current.map(m => {
             if (m.id === payload.new.message_id) {
@@ -171,7 +185,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
             return m
           }))
       })
-      // ÉCOUTE DES RÉACTIONS (DELETE)
+      // E. REACTIONS (Delete)
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'message_reactions' }, (payload) => {
           setMessages((current) => current.map(m => {
              if (m.message_reactions?.some(r => r.id === payload.old.id)) {
@@ -194,7 +208,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
 
   // 3. ACTIONS
   const handleReactionClick = async (emoji, msgId) => {
-    setReactingToMsgId(null) // Ferme le picker réaction
+    setReactingToMsgId(null) 
 
     const message = messages.find(m => m.id === msgId)
     if (!message) return
@@ -204,6 +218,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     )
 
     if (existingReaction) {
+      // Optimiste Delete
       setMessages(current => current.map(m => {
         if (m.id === msgId) return { ...m, message_reactions: m.message_reactions.filter(r => r.id !== existingReaction.id) }
         return m
@@ -211,8 +226,9 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
       await supabase.from('message_reactions').delete().eq('id', existingReaction.id)
 
     } else {
+      // Optimiste Insert
       const tempReaction = {
-        id: Date.now(), // ID temporaire
+        id: Date.now(), 
         message_id: msgId,
         user_id: currentUser.id,
         emoji: emoji,
@@ -267,6 +283,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
 
   const handleDelete = async (msgId) => {
     if (window.confirm("Supprimer ce message ?")) {
+      // Optimiste
       setMessages((current) => current.filter((msg) => msg.id !== msgId))
       await supabase.from('messages').delete().eq('id', msgId)
     }
@@ -279,9 +296,12 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     if (!editText.trim()) return handleDelete(editingId)
     const targetId = editingId
     const newContent = editText
+    
+    // Optimiste Update : On garde les réactions et on change le contenu
     setMessages((current) => current.map(m => m.id === targetId ? { ...m, content: newContent } : m))
     setEditingId(null)
     setEditText('')
+    
     await supabase.from('messages').update({ content: newContent }).eq('id', targetId)
   }
 
@@ -292,13 +312,9 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     }
   }
 
-  // --- GESTION EMOJI PRINCIPAL (INPUT) ---
   const onMainEmojiClick = (emojiObject) => {
-    // Ajout direct au texte
     setInputText(prev => prev + emojiObject.emoji)
-    // On garde le picker ouvert ou fermé selon préférence ? Ici on ferme pour valider l'action visuellement
     setShowMainPicker(false) 
-    // On remet le focus dans l'input pour continuer à écrire
     setTimeout(() => inputRef.current?.focus(), 10)
   }
 
@@ -372,7 +388,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
                   </div>
                 )}
 
-                {/* PILLULES DE RÉACTION (Visibles & Sans Chiffres) */}
+                {/* PILLULES DE RÉACTION */}
                 <ReactionPills 
                   reactions={msg.message_reactions} 
                   currentUserId={currentUser.id}
@@ -388,7 +404,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
                       onClick={(e) => {
                          e.stopPropagation()
                          setReactingToMsgId(msg.id)
-                         setShowMainPicker(false) // Ferme l'autre picker si ouvert
+                         setShowMainPicker(false)
                       }} 
                       className="p-1.5 bg-slate-800 text-yellow-400 hover:text-yellow-200 rounded-full hover:bg-white/10 border border-white/5 shadow-lg" 
                       title="Réagir"
@@ -412,13 +428,11 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         <div ref={messagesEndRef} />
       </div>
 
-      {/* --- MODALE PICKER (RÉACTION) --- */}
+      {/* MODALE PICKER (RÉACTION) */}
       <AnimatePresence>
         {reactingToMsgId && (
             <div className="fixed inset-0 z-50 flex items-center justify-center">
-                {/* Backdrop invisible pour fermer */}
                 <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setReactingToMsgId(null)} />
-                
                 <motion.div 
                     initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
                     className="relative z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/20"
@@ -435,10 +449,9 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         )}
       </AnimatePresence>
 
-      {/* --- PICKER FLOTTANT (INPUT PRINCIPAL) --- */}
+      {/* PICKER FLOTTANT (INPUT) */}
       {showMainPicker && (
          <>
-           {/* Backdrop invisible pour fermer proprement */}
            <div className="fixed inset-0 z-40" onClick={() => setShowMainPicker(false)} />
            <div className="absolute bottom-20 left-4 z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/10 bg-slate-900">
              <EmojiPicker onEmojiClick={onMainEmojiClick} theme="dark" width={300} height={400} lazyLoadEmojis={true} />
@@ -449,10 +462,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
       {/* INPUT ZONE */}
       <div className="p-3 bg-slate-800 border-t border-white/10 flex gap-2 items-end relative z-30">
         <button 
-          onClick={() => { 
-             setShowMainPicker(!showMainPicker); 
-             setReactingToMsgId(null); 
-          }} 
+          onClick={() => { setShowMainPicker(!showMainPicker); setReactingToMsgId(null); }} 
           className={`p-3 rounded-full transition ${showMainPicker ? 'bg-philo-primary text-white' : 'bg-black/30 text-gray-400 hover:text-white'}`}
         >
           <Smile size={20} />
