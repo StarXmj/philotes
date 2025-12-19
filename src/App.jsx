@@ -107,6 +107,7 @@ function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/onboarding" element={<Onboarding />} />
             <Route path="/app" element={<Dashboard />} />
+            <Route path="/profile" element={<Profile />} />
             <Route path="/update-password" element={<UpdatePassword />} />
           </Routes>
         </div>
