@@ -81,6 +81,7 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
   const canChat = !connection || connection.status === 'accepted';
 
   // 1. CHARGEMENT INITIAL + ÉCOUTE TEMPS RÉEL
+  // 1. CHARGEMENT INITIAL + ÉCOUTE TEMPS RÉEL (VERSION BLINDÉE)
   useEffect(() => {
     if (!connection?.id) return
 
@@ -96,41 +97,63 @@ const ChatInterface = ({ currentUser, targetUser, connection, onBack, onCreateCo
     fetchMessages()
 
     // B. S'abonner aux changements
+    // ON SÉPARE LES ÉCOUTEURS POUR CONTOURNER LE BUG DU FILTRE DELETE
     channelRef.current = supabase.channel(`room:${connection.id}`)
 
     channelRef.current
+      // 1. ÉCOUTEUR FILTRÉ (Pour Insert et Update - Ça marche bien)
       .on(
         'postgres_changes',
         {
-          event: '*',
+          event: 'INSERT',
           schema: 'public',
           table: 'messages',
-          filter: `connection_id=eq.${connection.id}` // Ce filtre marche mnt grâce à l'étape 1
+          filter: `connection_id=eq.${connection.id}` 
         },
         (payload) => {
-          console.log("Événement reçu :", payload) // <--- Regarde ta console si ça ne marche pas
-
-          // CAS 1 : INSERT
-          if (payload.eventType === 'INSERT') {
-            setMessages((current) => {
-              if (current.find(m => m.id === payload.new.id)) return current
-              return [...current, payload.new]
-            })
-            setIsRemoteTyping(false)
-          } 
-          // CAS 2 : UPDATE
-          else if (payload.eventType === 'UPDATE') {
-            setMessages((current) => 
-              current.map(m => m.id === payload.new.id ? payload.new : m)
-            )
-          }
-          // CAS 3 : DELETE (C'est ici que ça se joue)
-          else if (payload.eventType === 'DELETE') {
-            console.log("Suppression détectée pour l'ID :", payload.old.id)
-            setMessages((current) => 
-              current.filter(m => m.id !== payload.old.id)
-            )
-          }
+          setMessages((current) => {
+            if (current.find(m => m.id === payload.new.id)) return current
+            return [...current, payload.new]
+          })
+          setIsRemoteTyping(false)
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'messages',
+          filter: `connection_id=eq.${connection.id}`
+        },
+        (payload) => {
+          setMessages((current) => 
+            current.map(m => m.id === payload.new.id ? payload.new : m)
+          )
+        }
+      )
+      // 2. ÉCOUTEUR NON-FILTRÉ (Pour DELETE uniquement - LA SOLUTION MAGIQUE)
+      // On enlève le "filter" ici pour être sûr de recevoir l'info
+      .on(
+        'postgres_changes',
+        {
+          event: 'DELETE',
+          schema: 'public',
+          table: 'messages'
+          // PAS DE FILTRE ICI !
+        },
+        (payload) => {
+          // C'est le navigateur qui filtre maintenant
+          setMessages((current) => {
+            // Est-ce que le message supprimé est dans ma liste ?
+            const exists = current.find(m => m.id === payload.old.id)
+            if (exists) {
+              // Si oui, on le supprime
+              return current.filter(m => m.id !== payload.old.id)
+            }
+            // Sinon, on touche à rien (c'était un message d'une autre conversation)
+            return current
+          })
         }
       )
       .on('broadcast', { event: 'typing' }, (payload) => {
@@ -712,6 +735,7 @@ export default function Dashboard() {
       ).subscribe()
 
     // B. Messages (CORRIGÉ)
+    // B. Messages (CORRIGÉ ET BLINDÉ)
     const messageChannel = supabase.channel('dashboard-messages')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
             const me = myProfileRef.current
@@ -720,13 +744,18 @@ export default function Dashboard() {
             // Si c'est moi qui envoie, on ignore
             if (payload.new.sender_id === me.id) return;
 
-            const senderId = payload.new.sender_id;
+            const senderId = String(payload.new.sender_id); // Convertir en String
+            const currentActiveChat = activeChatRef.current ? String(activeChatRef.current) : null;
 
-            // --- NOUVELLE LIGNE MAGIQUE ---
-            // Si l'expéditeur est celui avec qui je suis en train de chatter, ON ARRÊTE TOUT.
-            // Pas de notif, pas de compteur.
-            if (activeChatRef.current === senderId) return; 
-            // -----------------------------
+            console.log(`Nouveau message de ${senderId}. Chat actif avec : ${currentActiveChat}`)
+
+            // --- LA VÉRIFICATION ---
+            // Si l'ID de l'expéditeur est le même que celui du chat ouvert
+            if (currentActiveChat === senderId) {
+              console.log("Message ignoré (Chat déjà ouvert)")
+              return; 
+            }
+            // ----------------------
 
             setUnreadCounts(prev => ({
                  ...prev,
@@ -742,9 +771,11 @@ export default function Dashboard() {
   }, [])
 
   const handleChatStatusChange = (userId, isChatting) => {
+    console.log("STATUT CHAT CHANGÉ :", userId, isChatting ? "Ouvert" : "Fermé")
+    
     if (isChatting) {
-      activeChatRef.current = userId
-      // On en profite pour reset le compteur visuel immédiatement
+      activeChatRef.current = String(userId) // On force en String pour être sûr
+      // On remet le compteur à zéro immédiatement pour nettoyer l'affichage
       setUnreadCounts(prev => ({ ...prev, [userId]: 0 }))
     } else {
       activeChatRef.current = null
