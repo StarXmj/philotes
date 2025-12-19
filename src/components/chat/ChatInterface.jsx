@@ -1,14 +1,14 @@
 import { useEffect, useState, useRef, useLayoutEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile, SmilePlus, AlertTriangle } from 'lucide-react'
+import { motion } from 'framer-motion'
+import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile } from 'lucide-react' // <--- Ajout de Smile
 import { supabase } from '../../lib/supabaseClient'
-import EmojiPicker from 'emoji-picker-react'
+import EmojiPicker from 'emoji-picker-react' // <--- Import de la lib
 
 const MESSAGE_LIFETIME_HOURS = 24
 const PAGE_SIZE = 20
 
-// --- SOUS-COMPOSANTS ---
-
+// --- SOUS-COMPOSANTS (TypingIndicator, MessageTimer) ---
+// (Je les garde identiques pour ne pas alourdir la lecture, ils ne changent pas)
 const TypingIndicator = () => (
   <div className="flex items-center gap-1 p-3 bg-white/10 rounded-2xl rounded-tl-none w-fit">
     <motion.div animate={{ y: [0, -5, 0] }} transition={{ duration: 0.6, repeat: Infinity, delay: 0 }} className="w-1.5 h-1.5 bg-gray-400 rounded-full" />
@@ -33,38 +33,10 @@ const MessageTimer = ({ createdAt }) => {
       }
     }
     updateTimer()
-    const interval = setInterval(updateTimer, 30000)
+    const interval = setInterval(updateTimer, 60000)
     return () => clearInterval(interval)
   }, [createdAt])
   return <div className="text-[9px] opacity-60 flex items-center justify-end gap-1 mt-1 font-mono"><Clock size={10} /> {timeLeft}</div>
-}
-
-const ReactionPills = ({ reactions, currentUserId, onToggle }) => {
-  if (!reactions || reactions.length === 0) return null
-  const groups = reactions.reduce((acc, r) => {
-    if (!acc[r.emoji]) acc[r.emoji] = { count: 0, hasReacted: false }
-    acc[r.emoji].count++
-    if (r.user_id === currentUserId) acc[r.emoji].hasReacted = true
-    return acc
-  }, {})
-
-  return (
-    <div className="flex flex-wrap gap-1 mt-1 justify-end relative z-10">
-      {Object.entries(groups).map(([emoji, data]) => (
-        <button
-          key={emoji}
-          onClick={(e) => { e.stopPropagation(); onToggle(emoji); }}
-          className={`text-sm px-2 py-1 rounded-full border flex items-center justify-center transition-all ${
-            data.hasReacted 
-              ? 'bg-philo-primary/20 border-philo-primary text-white scale-105' 
-              : 'bg-black/30 border-white/10 text-gray-400 hover:bg-white/10 hover:border-white/30'
-          }`}
-        >
-          <span className="leading-none">{emoji}</span>
-        </button>
-      ))}
-    </div>
-  )
 }
 
 // --- COMPOSANT PRINCIPAL ---
@@ -73,15 +45,15 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
   const [isRemoteTyping, setIsRemoteTyping] = useState(false)
-  const [fetchError, setFetchError] = useState(false) // Pour savoir si les réactions ont planté
   
-  // États UI
-  const [showMainPicker, setShowMainPicker] = useState(false)
-  const [reactingToMsgId, setReactingToMsgId] = useState(null)
-  
-  // États Pagination & Édition
+  // --- ÉTAT EMOJI ---
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
+
+  // --- ÉTATS PAGINATION ---
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
+  
+  // --- ÉTATS POUR L'ÉDITION ---
   const [editingId, setEditingId] = useState(null)
   const [editText, setEditText] = useState('')
   
@@ -90,51 +62,28 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const channelRef = useRef(null)
   const typingTimeoutRef = useRef(null)
   const scrollHeightRef = useRef(0)
-  const inputRef = useRef(null)
 
   let statusLabel = "Aucun lien"
   if (connection?.status === 'pending') statusLabel = "En attente"
   if (connection?.status === 'accepted') statusLabel = "Lien actif ✨"
+
   const canChat = !connection || connection.status === 'accepted'
 
-  // 1. CHARGEMENT ROBUSTE (C'EST ICI QUE JE CORRIGE LE PROBLEME)
+  // 1. CHARGEMENT DES MESSAGES (PAGINÉ)
   const fetchMessages = async (offset = 0) => {
     if (!connection?.id) return
-
     try {
-      // TENTATIVE 1 : Charger avec les réactions (Le mode normal)
-      let { data, error } = await supabase
+      const { data, error } = await supabase
         .from('messages')
-        .select('*, message_reactions(*)') // <-- C'est ça qui peut planter
+        .select('*')
         .eq('connection_id', connection.id)
         .order('created_at', { ascending: false })
         .range(offset, offset + PAGE_SIZE - 1)
 
-      // TENTATIVE 2 : MODE SECOURS (Si erreur SQL, on charge sans réaction)
-      if (error) {
-        console.warn("⚠️ Échec chargement réactions, passage en mode secours.", error)
-        setFetchError(true)
-        
-        const retry = await supabase
-          .from('messages')
-          .select('*') // Chargement simple
-          .eq('connection_id', connection.id)
-          .order('created_at', { ascending: false })
-          .range(offset, offset + PAGE_SIZE - 1)
-        
-        data = retry.data
-        error = retry.error
-      }
-
       if (error) throw error
-
       if (data.length < PAGE_SIZE) setHasMore(false)
 
-      // On s'assure que message_reactions est un tableau vide si manquant
-      const newMessages = data.reverse().map(m => ({
-        ...m,
-        message_reactions: m.message_reactions || []
-      }))
+      const newMessages = data.reverse()
 
       if (offset === 0) {
         setMessages(newMessages)
@@ -143,13 +92,13 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         setMessages(prev => [...newMessages, ...prev])
       }
     } catch (err) {
-      console.error("Erreur critique chargement:", err)
+      console.error("Erreur chargement messages:", err)
     } finally {
       setIsLoadingMore(false)
     }
   }
 
-  // 2. REALTIME
+  // 2. INITIALISATION
   useEffect(() => {
     setMessages([])
     setHasMore(true)
@@ -158,38 +107,24 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     if (!connection?.id) return
 
     channelRef.current = supabase.channel(`room:${connection.id}`)
-    
-    // Setup listeners
     channelRef.current
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
-          const newMsg = { ...payload.new, message_reactions: [] }
           setMessages((current) => {
-            if (current.find(m => m.id === newMsg.id)) return current
-            return [...current, newMsg]
+            if (current.find(m => m.id === payload.new.id)) return current
+            return [...current, payload.new]
           })
           setIsRemoteTyping(false)
           setTimeout(() => scrollToBottom(), 100)
-      })
+        }
+      )
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
-          setMessages((current) => current.map(m => m.id === payload.new.id ? { ...m, ...payload.new } : m))
-      })
+          setMessages((current) => current.map(m => m.id === payload.new.id ? payload.new : m))
+        }
+      )
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (payload) => {
           setMessages((current) => current.filter(m => m.id !== payload.old.id))
-      })
-      // On n'écoute les réactions que si ça marche
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, (payload) => {
-          // On recharge les messages au moindre mouvement de réaction pour être sûr d'avoir l'état frais
-          // C'est une stratégie "lazy" mais plus fiable quand le realtime est capricieux sur les jointures
-          if (payload.new && payload.new.message_id) {
-             setMessages(prev => prev.map(m => {
-                if (m.id === payload.new.message_id) {
-                   // Petit hack : on simule l'ajout local si c'est un insert simple
-                   if(payload.eventType === 'INSERT') return {...m, message_reactions: [...(m.message_reactions||[]), payload.new]}
-                }
-                return m
-             }))
-          }
-      })
+        }
+      )
       .on('broadcast', { event: 'typing' }, (payload) => {
         if (payload.userId !== currentUser.id) {
           setIsRemoteTyping(true)
@@ -202,28 +137,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     return () => { supabase.removeChannel(channelRef.current) }
   }, [connection?.id, currentUser.id])
 
-  // 3. ACTIONS
-  const handleReactionClick = async (emoji, msgId) => {
-    if (fetchError) {
-        alert("Les réactions sont indisponibles pour le moment (Erreur BDD).")
-        return
-    }
-    setReactingToMsgId(null) 
-    const message = messages.find(m => m.id === msgId)
-    if (!message) return
-
-    const existingReaction = message.message_reactions?.find(r => r.user_id === currentUser.id && r.emoji === emoji)
-
-    if (existingReaction) {
-      setMessages(current => current.map(m => m.id === msgId ? { ...m, message_reactions: m.message_reactions.filter(r => r.id !== existingReaction.id) } : m))
-      await supabase.from('message_reactions').delete().eq('id', existingReaction.id)
-    } else {
-      const tempReaction = { id: Date.now(), message_id: msgId, user_id: currentUser.id, emoji: emoji, created_at: new Date().toISOString() }
-      setMessages(current => current.map(m => m.id === msgId ? { ...m, message_reactions: [...(m.message_reactions || []), tempReaction] } : m))
-      await supabase.from('message_reactions').insert({ message_id: msgId, user_id: currentUser.id, emoji: emoji })
-    }
-  }
-
+  // 3. SCROLL & UI
   const handleScroll = (e) => {
     const { scrollTop, scrollHeight } = e.target
     if (scrollTop === 0 && hasMore && !isLoadingMore && messages.length >= PAGE_SIZE) {
@@ -243,8 +157,11 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     }
   }, [messages])
 
-  const scrollToBottom = () => { messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }) }
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+  }
 
+  // 4. ACTIONS
   const handleDelete = async (msgId) => {
     if (window.confirm("Supprimer ce message ?")) {
       setMessages((current) => current.filter((msg) => msg.id !== msgId))
@@ -252,9 +169,16 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     }
   }
 
-  const startEdit = (msg) => { setEditingId(msg.id); setEditText(msg.content); }
-  const cancelEdit = () => { setEditingId(null); setEditText(''); }
-  
+  const startEdit = (msg) => {
+    setEditingId(msg.id)
+    setEditText(msg.content)
+  }
+
+  const cancelEdit = () => {
+    setEditingId(null)
+    setEditText('')
+  }
+
   const saveEdit = async () => {
     if (!editText.trim()) return handleDelete(editingId)
     const targetId = editingId
@@ -272,10 +196,10 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     }
   }
 
-  const onMainEmojiClick = (emojiObject) => {
+  // --- GESTION EMOJI ---
+  const onEmojiClick = (emojiObject) => {
     setInputText(prev => prev + emojiObject.emoji)
-    setShowMainPicker(false) 
-    setTimeout(() => inputRef.current?.focus(), 10)
+    setShowEmojiPicker(false) // On ferme après sélection ? Ou on laisse ouvert (à toi de voir, ici je ferme)
   }
 
   const sendMessage = async (e) => {
@@ -283,11 +207,13 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     if (!inputText.trim()) return
     const text = inputText
     setInputText('')
-    setShowMainPicker(false)
+    setShowEmojiPicker(false) // On ferme le picker à l'envoi
+    
     try {
       let currentConn = connection
-      if (!currentConn) { currentConn = await onCreateConnection(text) } 
-      else {
+      if (!currentConn) {
+        currentConn = await onCreateConnection(text)
+      } else {
         await supabase.from('messages').insert({
           connection_id: currentConn.id,
           sender_id: currentUser.id,
@@ -299,7 +225,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   }
 
   return (
-    <div className="flex flex-col h-full bg-slate-900 relative">
+    <div className="flex flex-col h-full bg-slate-900">
       {/* HEADER */}
       <div className="flex items-center gap-3 p-4 bg-slate-800 border-b border-white/10 shadow-md z-10">
         <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition text-gray-300">
@@ -313,18 +239,11 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         </div>
       </div>
 
-      {/* ALERT ERREUR FETCH */}
-      {fetchError && (
-          <div className="bg-red-500/10 border-b border-red-500/20 p-2 text-center text-red-400 text-xs flex items-center justify-center gap-2">
-              <AlertTriangle size={12}/> Réactions désactivées (Configuration BDD incomplète)
-          </div>
-      )}
-
       {/* MESSAGES */}
       <div 
         ref={containerRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/20 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative"
+        className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/20 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
       >
         {isLoadingMore && <div className="flex justify-center py-2"><Loader2 className="animate-spin text-philo-primary w-5 h-5" /></div>}
         {!hasMore && messages.length > 0 && <div className="text-center text-gray-500 text-xs py-4 opacity-50">— Début de l'historique —</div>}
@@ -338,9 +257,8 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
           const isMe = msg.sender_id === currentUser.id
           const isEditing = editingId === msg.id
           return (
-            <div key={msg.id} className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'} mb-2`}>
+            <div key={msg.id} className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[85%] relative ${isEditing ? 'w-full' : ''}`}>
-                {/* BULLE */}
                 {isEditing ? (
                   <div className="flex gap-2 w-full">
                     <input autoFocus type="text" value={editText} onChange={(e) => setEditText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveEdit()} className="flex-1 bg-black/50 border border-philo-primary rounded-xl px-3 py-2 text-sm text-white outline-none" />
@@ -348,21 +266,15 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
                     <button onClick={cancelEdit} className="p-2 bg-red-500/20 text-red-400 rounded-full hover:bg-red-500/40"><X size={14}/></button>
                   </div>
                 ) : (
-                  <div className={`p-3 rounded-2xl text-sm break-words relative transition-all ${isMe ? 'bg-philo-primary text-white rounded-tr-none' : 'bg-white/10 text-gray-200 rounded-tl-none'}`}>
+                  <div className={`p-3 rounded-2xl text-sm break-words relative ${isMe ? 'bg-philo-primary text-white rounded-tr-none' : 'bg-white/10 text-gray-200 rounded-tl-none'}`}>
                     {msg.content}
                     <MessageTimer createdAt={msg.created_at} />
                   </div>
                 )}
-                {/* PILLULES RÉACTION */}
-                <ReactionPills reactions={msg.message_reactions} currentUserId={currentUser.id} onToggle={(emoji) => handleReactionClick(emoji, msg.id)} />
-                {/* ACTIONS */}
-                {!isEditing && (
-                  <div className={`absolute -top-6 ${isMe ? 'right-0' : 'left-0'} flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity px-2 z-10`}>
-                    <button onClick={(e) => { e.stopPropagation(); setReactingToMsgId(msg.id); setShowMainPicker(false); }} className="p-1.5 bg-slate-800 text-yellow-400 hover:text-yellow-200 rounded-full hover:bg-white/10 border border-white/5 shadow-lg"><SmilePlus size={14} /></button>
-                    {isMe && (<>
-                        <button onClick={() => startEdit(msg)} className="p-1.5 bg-slate-800 text-gray-400 hover:text-white rounded-full hover:bg-white/10 border border-white/5 shadow-lg"><Pencil size={14} /></button>
-                        <button onClick={() => handleDelete(msg.id)} className="p-1.5 bg-slate-800 text-red-400 hover:text-red-300 rounded-full hover:bg-red-900/30 border border-white/5 shadow-lg"><Trash2 size={14} /></button>
-                    </>)}
+                {isMe && !isEditing && (
+                  <div className="absolute top-0 -left-16 h-full flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity px-2">
+                    <button onClick={() => startEdit(msg)} className="p-1.5 bg-slate-800 text-gray-400 hover:text-white rounded-full hover:bg-white/10"><Pencil size={12} /></button>
+                    <button onClick={() => handleDelete(msg.id)} className="p-1.5 bg-slate-800 text-red-400 hover:text-red-300 rounded-full hover:bg-red-900/30"><Trash2 size={12} /></button>
                   </div>
                 )}
               </div>
@@ -373,25 +285,41 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         <div ref={messagesEndRef} />
       </div>
 
-      {/* PICKERS */}
-      <AnimatePresence>
-        {reactingToMsgId && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center">
-                <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setReactingToMsgId(null)} />
-                <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="relative z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/20">
-                    <EmojiPicker onEmojiClick={(emoji) => handleReactionClick(emoji.emoji, reactingToMsgId)} theme="dark" lazyLoadEmojis={true} />
-                </motion.div>
-            </div>
+      {/* INPUT ZONE */}
+      <div className="p-3 bg-slate-800 border-t border-white/10 flex gap-2 items-end relative">
+        
+        {/* PICKER FLOTTANT */}
+        {showEmojiPicker && (
+          <div className="absolute bottom-16 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/10">
+            <EmojiPicker 
+              onEmojiClick={onEmojiClick}
+              theme="dark"
+              width={300}
+              height={400}
+              lazyLoadEmojis={true}
+            />
+          </div>
         )}
-      </AnimatePresence>
-      {showMainPicker && (<><div className="fixed inset-0 z-40" onClick={() => setShowMainPicker(false)} /><div className="absolute bottom-20 left-4 z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/10 bg-slate-900"><EmojiPicker onEmojiClick={onMainEmojiClick} theme="dark" width={300} height={400} lazyLoadEmojis={true} /></div></>)}
 
-      {/* INPUT */}
-      <div className="p-3 bg-slate-800 border-t border-white/10 flex gap-2 items-end relative z-30">
-        <button onClick={() => { setShowMainPicker(!showMainPicker); setReactingToMsgId(null); }} className={`p-3 rounded-full transition ${showMainPicker ? 'bg-philo-primary text-white' : 'bg-black/30 text-gray-400 hover:text-white'}`}><Smile size={20} /></button>
+        <button 
+          onClick={() => setShowEmojiPicker(!showEmojiPicker)} 
+          className={`p-3 rounded-full transition ${showEmojiPicker ? 'bg-philo-primary text-white' : 'bg-black/30 text-gray-400 hover:text-white'}`}
+        >
+          <Smile size={20} />
+        </button>
+
         <form onSubmit={sendMessage} className="flex-1 flex gap-2">
-          <input ref={inputRef} type="text" value={inputText} onChange={handleTyping} disabled={!canChat} placeholder={!canChat ? "En attente d'acceptation..." : "Ton message..."} className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none disabled:opacity-50 disabled:cursor-not-allowed" />
-          <button disabled={!inputText.trim() || !canChat} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50"><Send size={18} /></button>
+          <input
+            type="text"
+            value={inputText}
+            onChange={handleTyping}
+            disabled={!canChat} 
+            placeholder={!canChat ? "En attente d'acceptation..." : "Ton message..."}
+            className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none disabled:opacity-50 disabled:cursor-not-allowed"
+          />
+          <button disabled={!inputText.trim() || !canChat} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50">
+            <Send size={18} />
+          </button>
         </form>
       </div>
     </div>
