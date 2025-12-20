@@ -3,134 +3,171 @@ import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
 import { User, LogOut, UserCircle, Clock } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { useAuth } from '../contexts/AuthContext'
 import UserProfileSidebar from '../components/dashboard/UserProfileSidebar'
 
 export default function Dashboard() {
   const navigate = useNavigate()
+  // Récupération du contexte
+  const { user, profile: myProfile, loading: authLoading } = useAuth()
+  
   const [matches, setMatches] = useState([])
-  const [myProfile, setMyProfile] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loadingMatches, setLoadingMatches] = useState(true)
   const [selectedUser, setSelectedUser] = useState(null)
   const [unreadCounts, setUnreadCounts] = useState({})
   
   const activeChatRef = useRef(null) 
   const myProfileRef = useRef(null)
 
+  // Synchro ref profil
   useEffect(() => {
     myProfileRef.current = myProfile
   }, [myProfile])
 
-  // 1. CHARGEMENT
-  const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return navigate('/')
+  // --- 1. CHARGEMENT DES DONNÉES (VERSION BLINDÉE) ---
+  useEffect(() => {
+    console.log("Dashboard: État Auth ->", { authLoading, userId: user?.id, hasProfile: !!myProfile })
 
-    const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-    setMyProfile(profile)
-    myProfileRef.current = profile
+    // 1. Si l'auth charge encore, on attend
+    if (authLoading) return
 
-    if (profile && profile.embedding) {
-      // On récupère les matches
-      const { data: matchedUsers } = await supabase.rpc('match_students', {
-        query_embedding: profile.embedding,
-        match_threshold: 0.5,
-        match_count: 8
-      })
+    // 2. Si l'auth est finie mais pas de user/profil, on coupe le chargement local
+    if (!user || !myProfile) {
+      console.warn("Dashboard: Pas de user ou profil, arrêt du chargement.")
+      setLoadingMatches(false)
+      return
+    }
 
-      if (matchedUsers) {
-        // On récupère l'état des connexions
-        const { data: allMyConnections } = await supabase
-          .from('connections')
-          .select('*')
-          .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
+    // 3. Lancement du chargement des matches
+    const loadMatches = async () => {
+      console.log("Dashboard: Démarrage loadMatches...")
+      
+      // SÉCURITÉ : Timeout pour forcer la fin du chargement si ça bloque
+      const safetyTimer = setTimeout(() => {
+        console.error("Dashboard: TIMEOUT ! Le chargement a pris trop de temps.")
+        setLoadingMatches(false)
+      }, 5000)
 
-        const matchesWithStatus = matchedUsers
-          .filter(p => p.id !== user.id)
-          .map(match => {
-            const conn = allMyConnections?.find(c => 
-              (c.sender_id === user.id && c.receiver_id === match.id) ||
-              (c.receiver_id === user.id && c.sender_id === match.id)
-            )
-            return { ...match, connection: conn || null }
+      try {
+        if (myProfile.embedding) {
+          // Appel RPC
+          const { data: matchedUsers, error: rpcError } = await supabase.rpc('match_students', {
+            query_embedding: myProfile.embedding,
+            match_threshold: 0.5,
+            match_count: 8
           })
-        
-        // Tri : Amis proches d'abord
-        matchesWithStatus.sort((a, b) => {
-           const aIsFriend = a.connection?.status === 'accepted' ? 1 : 0
-           const bIsFriend = b.connection?.status === 'accepted' ? 1 : 0
-           return bIsFriend - aIsFriend
-        })
 
-        setMatches(matchesWithStatus)
+          if (rpcError) throw rpcError
+
+          if (matchedUsers) {
+            // Récupération des connexions
+            const { data: allMyConnections, error: connError } = await supabase
+              .from('connections')
+              .select('*')
+              .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
+
+            if (connError) throw connError
+
+            // Fusion des données
+            const matchesWithStatus = matchedUsers
+              .filter(p => p.id !== user.id)
+              .map(match => {
+                const conn = allMyConnections?.find(c => 
+                  (c.sender_id === user.id && c.receiver_id === match.id) ||
+                  (c.receiver_id === user.id && c.sender_id === match.id)
+                )
+                return { ...match, connection: conn || null }
+              })
+            
+            // Tri
+            matchesWithStatus.sort((a, b) => {
+               const aIsFriend = a.connection?.status === 'accepted' ? 1 : 0
+               const bIsFriend = b.connection?.status === 'accepted' ? 1 : 0
+               return bIsFriend - aIsFriend
+            })
+
+            console.log("Dashboard: Matches chargés ->", matchesWithStatus.length)
+            setMatches(matchesWithStatus)
+          }
+        } else {
+            console.log("Dashboard: Pas d'embedding sur le profil.")
+        }
+      } catch (error) {
+        console.error("Dashboard: Erreur CRITIQUE loadMatches:", error)
+      } finally {
+        // QUOI QU'IL ARRIVE, on arrête le chargement
+        clearTimeout(safetyTimer)
+        setLoadingMatches(false)
       }
     }
-    setLoading(false)
-  }
 
-  useEffect(() => {
-    fetchData()
-  }, [navigate])
+    loadMatches()
+  }, [user, myProfile, authLoading])
 
-  // 2. TEMPS RÉEL
+  // --- 2. TEMPS RÉEL (Correctif précédent inclus) ---
   useEffect(() => {
+    if (!user) return
+
     const channel = supabase.channel('dashboard-room')
 
-    channel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
-          const me = myProfileRef.current
-          if (!me) return
-
-          const isInvolved = (payload.new && (payload.new.sender_id === me.id || payload.new.receiver_id === me.id)) ||
-                             (payload.old && (payload.old.sender_id === me.id || payload.old.receiver_id === me.id))
-
-          if (!isInvolved) return
-
-          setMatches(currentMatches => {
+    const handleConnectionChange = (payload) => {
+        setMatches(currentMatches => {
             return currentMatches.map(match => {
-              if (payload.new && (payload.new.sender_id === match.id || payload.new.receiver_id === match.id)) {
-                return { ...match, connection: payload.new }
-              }
-              if (payload.eventType === 'DELETE' && (payload.old.sender_id === match.id || payload.old.receiver_id === match.id)) {
-                 return { ...match, connection: null }
-              }
-              return match
+                const isRelevant = 
+                    (payload.new && (payload.new.sender_id === match.id || payload.new.receiver_id === match.id)) ||
+                    (payload.old && (payload.old.sender_id === match.id || payload.old.receiver_id === match.id))
+                
+                if (isRelevant) {
+                    if (payload.eventType === 'DELETE') {
+                        return { ...match, connection: null }
+                    }
+                    return { ...match, connection: payload.new }
+                }
+                return match
             })
-          })
-      })
+        })
+    }
+
+    channel
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections', filter: `sender_id=eq.${user.id}` }, handleConnectionChange)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections', filter: `receiver_id=eq.${user.id}` }, handleConnectionChange)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
           const me = myProfileRef.current
           if (!me) return
-
           if (payload.new.sender_id === me.id) return
 
           const senderId = String(payload.new.sender_id)
           const currentActiveChat = activeChatRef.current ? String(activeChatRef.current) : null
 
-          if (currentActiveChat === senderId) return 
-
-          setUnreadCounts(prev => ({ ...prev, [senderId]: (prev[senderId] || 0) + 1 }))
+          if (currentActiveChat !== senderId) {
+             setUnreadCounts(prev => ({ ...prev, [senderId]: (prev[senderId] || 0) + 1 }))
+          }
       })
       .subscribe()
 
-    return () => { 
-        supabase.removeChannel(channel)
-    }
-  }, [])
+    return () => { supabase.removeChannel(channel) }
+  }, [user])
 
   const handleChatStatusChange = useCallback((userId, isChatting) => {
     if (isChatting) {
       activeChatRef.current = String(userId) 
       setUnreadCounts(prev => ({ ...prev, [userId]: 0 }))
     } else {
-      if (activeChatRef.current === String(userId)) {
-        activeChatRef.current = null
-      }
+      if (activeChatRef.current === String(userId)) activeChatRef.current = null
     }
   }, [])
 
   const handleLogout = async () => await supabase.auth.signOut() 
 
-  if (loading) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white">Chargement...</div>
+  // --- RENDER ---
+  if (authLoading || loadingMatches) {
+    return (
+        <div className="min-h-screen bg-philo-dark flex flex-col items-center justify-center text-white gap-4">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-philo-primary"></div>
+            <p className="text-sm text-gray-400">Chargement de la constellation...</p>
+        </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-philo-dark text-white p-4 relative overflow-hidden">
@@ -139,7 +176,6 @@ export default function Dashboard() {
       <div className="flex justify-between items-center z-20 w-full max-w-4xl mx-auto py-4 px-4 relative">
         <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
         <div className="flex gap-2 items-center">
-          {/* Avatar de l'utilisateur connecté dans la navbar */}
           <button onClick={() => navigate('/profile')} className="rounded-full hover:opacity-80 transition overflow-hidden border border-white/20 w-10 h-10">
              {myProfile?.avatar_prive ? (
                <img src={myProfile.avatar_prive} alt="Moi" className="w-full h-full object-cover" />
@@ -190,10 +226,6 @@ export default function Dashboard() {
             const unread = unreadCounts[match.id] || 0
             const hasNotif = unread > 0
 
-            // LOGIQUE D'AFFICHAGE DE L'AVATAR
-            // 1. Si on est amis (accepted) ET qu'il a une vraie photo => Vraie photo
-            // 2. Sinon => Avatar public
-            // 3. Sinon => Icône par défaut
             let avatarSrc = null
             if (isAccepted && match.avatar_prive) {
                 avatarSrc = match.avatar_prive
@@ -207,7 +239,7 @@ export default function Dashboard() {
                     containerClass = "border-red-500 bg-red-500/10 shadow-[0_0_20px_rgba(239,68,68,0.6)] animate-pulse"
                 }
             } else if (conn?.status === 'pending') {
-                const isMeSender = conn.sender_id === myProfile?.id
+                const isMeSender = conn.sender_id === user.id
                 if (isMeSender) {
                     containerClass = "border-white/30 border-dashed bg-white/5"
                     badge = <div className="absolute -top-1 -right-1 bg-gray-600 p-1 rounded-full"><Clock size={10}/></div>
@@ -235,7 +267,6 @@ export default function Dashboard() {
                 onClick={() => setSelectedUser(match)}
               >
                 <div className={`w-20 h-20 rounded-full backdrop-blur-md border-2 flex items-center justify-center transition-all relative overflow-hidden ${containerClass}`}>
-                  
                   {avatarSrc ? (
                       <img src={avatarSrc} alt={match.pseudo} className="w-full h-full object-cover" />
                   ) : (
@@ -248,7 +279,6 @@ export default function Dashboard() {
 
                   {badge}
 
-                  {/* Compteur Non-lus */}
                   {hasNotif && (
                       <div className="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center font-bold text-xs shadow-lg animate-bounce z-20 border-2 border-slate-900">
                           {unread > 9 ? '+9' : unread}
