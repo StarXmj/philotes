@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react' // <-- AJOUT DE useCallback
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
 import { User, LogOut, UserCircle, Clock } from 'lucide-react'
@@ -30,6 +30,7 @@ export default function Dashboard() {
     myProfileRef.current = profile
 
     if (profile && profile.embedding) {
+      // On récupère les matches
       const { data: matchedUsers } = await supabase.rpc('match_students', {
         query_embedding: profile.embedding,
         match_threshold: 0.5,
@@ -37,6 +38,7 @@ export default function Dashboard() {
       })
 
       if (matchedUsers) {
+        // On récupère l'état des connexions
         const { data: allMyConnections } = await supabase
           .from('connections')
           .select('*')
@@ -52,6 +54,7 @@ export default function Dashboard() {
             return { ...match, connection: conn || null }
           })
         
+        // Tri : Amis proches d'abord
         matchesWithStatus.sort((a, b) => {
            const aIsFriend = a.connection?.status === 'accepted' ? 1 : 0
            const bIsFriend = b.connection?.status === 'accepted' ? 1 : 0
@@ -68,7 +71,7 @@ export default function Dashboard() {
     fetchData()
   }, [navigate])
 
-  // 2. TEMPS RÉEL (VERSION STABLE)
+  // 2. TEMPS RÉEL
   useEffect(() => {
     const channel = supabase.channel('dashboard-room')
 
@@ -103,9 +106,6 @@ export default function Dashboard() {
           const senderId = String(payload.new.sender_id)
           const currentActiveChat = activeChatRef.current ? String(activeChatRef.current) : null
 
-          // DEBUG : Pour vérifier que ça marche
-          // console.log(`Notif check: Sender=${senderId}, Active=${currentActiveChat}`)
-
           if (currentActiveChat === senderId) return 
 
           setUnreadCounts(prev => ({ ...prev, [senderId]: (prev[senderId] || 0) + 1 }))
@@ -115,16 +115,13 @@ export default function Dashboard() {
     return () => { 
         supabase.removeChannel(channel)
     }
-  }, []) // Plus de dépendance 'loading' inutile ici
+  }, [])
 
-  // --- LE FIX EST ICI : useCallback ---
   const handleChatStatusChange = useCallback((userId, isChatting) => {
     if (isChatting) {
       activeChatRef.current = String(userId) 
-      // On nettoie les notifs immédiatement quand on ouvre le chat
       setUnreadCounts(prev => ({ ...prev, [userId]: 0 }))
     } else {
-      // On ne reset activeChatRef QUE si c'est l'utilisateur actuel qu'on quitte
       if (activeChatRef.current === String(userId)) {
         activeChatRef.current = null
       }
@@ -141,8 +138,17 @@ export default function Dashboard() {
       {/* Navbar */}
       <div className="flex justify-between items-center z-20 w-full max-w-4xl mx-auto py-4 px-4 relative">
         <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
-        <div className="flex gap-2">
-          <button onClick={() => navigate('/profile')} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition"><UserCircle size={20} /></button>
+        <div className="flex gap-2 items-center">
+          {/* Avatar de l'utilisateur connecté dans la navbar */}
+          <button onClick={() => navigate('/profile')} className="rounded-full hover:opacity-80 transition overflow-hidden border border-white/20 w-10 h-10">
+             {myProfile?.avatar_prive ? (
+               <img src={myProfile.avatar_prive} alt="Moi" className="w-full h-full object-cover" />
+             ) : myProfile?.avatar_public ? (
+               <img src={`/avatars/${myProfile.avatar_public}`} alt="Moi" className="w-full h-full object-cover" />
+             ) : (
+               <UserCircle size={38} className="text-gray-300 w-full h-full p-1" />
+             )}
+          </button>
           <button onClick={handleLogout} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition"><LogOut size={20} /></button>
         </div>
       </div>
@@ -154,11 +160,19 @@ export default function Dashboard() {
         <div className="absolute rounded-full border border-white/5 w-[260px] h-[260px]" />
         <div className="absolute rounded-full border border-white/5 w-[480px] h-[480px]" />
 
-        {/* Moi */}
-        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="z-20 w-24 h-24 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary flex flex-col items-center justify-center shadow-[0_0_40px_rgba(139,92,246,0.6)] border-4 border-philo-dark relative">
-          <span className="text-2xl">😎</span>
-          <span className="text-xs font-bold mt-1">{myProfile?.pseudo || 'Moi'}</span>
+        {/* Moi (Centre) */}
+        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="z-20 w-24 h-24 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary flex flex-col items-center justify-center shadow-[0_0_40px_rgba(139,92,246,0.6)] border-4 border-philo-dark relative overflow-hidden">
+           {myProfile?.avatar_prive ? (
+               <img src={myProfile.avatar_prive} alt="Moi" className="w-full h-full object-cover" />
+           ) : myProfile?.avatar_public ? (
+               <img src={`/avatars/${myProfile.avatar_public}`} alt="Moi" className="w-full h-full object-cover" />
+           ) : (
+               <span className="text-2xl">😎</span>
+           )}
         </motion.div>
+        <div className="absolute mt-32 z-20 bg-black/50 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm">
+            {myProfile?.pseudo || 'Moi'}
+        </div>
 
         {/* Les Autres Planètes */}
         {matches.map((match, index) => {
@@ -175,6 +189,17 @@ export default function Dashboard() {
             
             const unread = unreadCounts[match.id] || 0
             const hasNotif = unread > 0
+
+            // LOGIQUE D'AFFICHAGE DE L'AVATAR
+            // 1. Si on est amis (accepted) ET qu'il a une vraie photo => Vraie photo
+            // 2. Sinon => Avatar public
+            // 3. Sinon => Icône par défaut
+            let avatarSrc = null
+            if (isAccepted && match.avatar_prive) {
+                avatarSrc = match.avatar_prive
+            } else if (match.avatar_public) {
+                avatarSrc = `/avatars/${match.avatar_public}`
+            }
 
             if (isAccepted) {
                 containerClass = "border-philo-primary bg-philo-primary/10 shadow-[0_0_15px_rgba(139,92,246,0.3)]"
@@ -209,8 +234,13 @@ export default function Dashboard() {
                 className="absolute z-10 flex flex-col items-center cursor-pointer group"
                 onClick={() => setSelectedUser(match)}
               >
-                <div className={`w-20 h-20 rounded-full backdrop-blur-md border-2 flex items-center justify-center transition-all relative ${containerClass}`}>
-                  <User className="text-gray-200" />
+                <div className={`w-20 h-20 rounded-full backdrop-blur-md border-2 flex items-center justify-center transition-all relative overflow-hidden ${containerClass}`}>
+                  
+                  {avatarSrc ? (
+                      <img src={avatarSrc} alt={match.pseudo} className="w-full h-full object-cover" />
+                  ) : (
+                      <User className="text-gray-200" />
+                  )}
                   
                   <div className="absolute -bottom-2 bg-slate-900 border border-white/10 text-white text-[10px] font-bold px-2 py-0.5 rounded-full z-10">
                     {Math.round(match.similarity * 100)}%
@@ -242,7 +272,6 @@ export default function Dashboard() {
             <UserProfileSidebar 
               userId={selectedUser.id} 
               similarity={selectedUser.similarity} 
-              // 👇 AJOUT ICI : On passe le nombre de messages non-lus
               initialUnreadCount={unreadCounts[selectedUser.id] || 0}
               onClose={() => setSelectedUser(null)} 
               onChatStatusChange={handleChatStatusChange} 

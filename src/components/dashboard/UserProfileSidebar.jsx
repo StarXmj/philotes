@@ -4,7 +4,6 @@ import { BrainCircuit, X, Unlink, Sparkles, Lock, MessageCircle, UserPlus, Check
 import { supabase } from '../../lib/supabaseClient'
 import ChatInterface from '../chat/ChatInterface'
 
-// 👇 AJOUT DE 'initialUnreadCount' dans les props
 export default function UserProfileSidebar({ userId, onClose, similarity, onChatStatusChange, initialUnreadCount = 0 }) {
   const [view, setView] = useState('PROFILE')
   const [profile, setProfile] = useState(null)
@@ -12,35 +11,35 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
   const [connection, setConnection] = useState(null)
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
-  
-  // 👇 MODIFICATION ICI : On initialise avec la valeur reçue du Dashboard
   const [unreadCount, setUnreadCount] = useState(initialUnreadCount) 
 
+  // --- REFS CRITIQUES POUR LE TEMPS RÉEL ---
+  // Ces refs permettent au Realtime d'accéder aux valeurs "fraîches" sans redémarrer l'écouteur
+  const connectionRef = useRef(null)
   const viewRef = useRef(view)
-  const currentUserRef = useRef(null)
-
-  // 👇 AJOUT : Si le Dashboard met à jour le compteur (cas rare mais possible), on suit
-  useEffect(() => {
-    if (view === 'PROFILE') {
-        setUnreadCount(initialUnreadCount)
-    }
-  }, [initialUnreadCount])
-
+  
+  // On synchronise les refs à chaque changement d'état
+  useEffect(() => { connectionRef.current = connection }, [connection])
   useEffect(() => { viewRef.current = view }, [view])
+  // Synchronisation du compteur si le parent le met à jour
+  useEffect(() => { if (view === 'PROFILE') setUnreadCount(initialUnreadCount) }, [initialUnreadCount])
 
+  // 1. CHARGEMENT INITIAL DES DONNÉES
   useEffect(() => {
     const init = async () => {
       setLoading(true)
       const { data: { user } } = await supabase.auth.getUser()
       setCurrentUser(user)
-      currentUserRef.current = user
 
+      // Charger Profil
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).single()
       setProfile(prof)
 
+      // Charger Réponses (Vibe)
       const { data: ans } = await supabase.from('user_answers').select('question_id, questions(text), options(text)').eq('user_id', userId)
       setAnswers(ans || [])
 
+      // Charger Connexion
       const { data: conn } = await supabase
         .from('connections')
         .select('*')
@@ -53,28 +52,36 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
     if (userId) init()
   }, [userId])
 
+  // 2. ABONNEMENT TEMPS RÉEL (ROBUSTE)
   useEffect(() => {
-    if (!currentUserRef.current || !userId) return
+    // On ne s'abonne que si on sait QUI on est et QUI on regarde
+    if (!currentUser || !userId) return
 
-    const myId = currentUserRef.current.id
+    const myId = currentUser.id
     const channel = supabase.channel(`sidebar-${userId}`)
 
     channel
       .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
-        const isRelevant = 
-           (payload.new && ((payload.new.sender_id === myId && payload.new.receiver_id === userId) || (payload.new.receiver_id === myId && payload.new.sender_id === userId))) ||
-           (payload.old && ((payload.old.sender_id === myId && payload.old.receiver_id === userId) || (payload.old.receiver_id === myId && payload.old.sender_id === userId)))
-
-        if (isRelevant) {
-           if (payload.eventType === 'DELETE') {
-             setConnection(null)
-           } else {
-             setConnection(payload.new)
-           }
+        // CAS : SUPPRESSION (Rupture)
+        if (payload.eventType === 'DELETE') {
+             // On vérifie si l'ID supprimé correspond à notre connexion actuelle (via la Ref)
+             if (connectionRef.current && payload.old.id === connectionRef.current.id) {
+                 setConnection(null) // On casse le lien immédiatement
+             }
+        } 
+        // CAS : INSERTION (Demande) ou UPDATE (Acceptation)
+        else if (payload.new) {
+             const isRelevant = 
+               (payload.new.sender_id === myId && payload.new.receiver_id === userId) || 
+               (payload.new.receiver_id === myId && payload.new.sender_id === userId)
+             
+             if (isRelevant) {
+                 setConnection(payload.new) // On met à jour (En attente -> Accepté, ou Nouveau lien)
+             }
         }
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
-         // Si c'est un message de LUI pour MOI et que je suis sur le PROFIL
+         // Notification message
          if (payload.new.sender_id === userId && viewRef.current === 'PROFILE') {
             setUnreadCount(prev => prev + 1)
          }
@@ -82,13 +89,13 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [userId])
+  }, [userId, currentUser]) // <-- IMPORTANT : Dépend de currentUser pour avoir le bon ID
 
   useEffect(() => {
-    return () => {
-      if (onChatStatusChange) onChatStatusChange(userId, false)
-    }
+    return () => { if (onChatStatusChange) onChatStatusChange(userId, false) }
   }, [userId, onChatStatusChange])
+
+  // --- ACTIONS ---
 
   const handleCreateConnection = async (firstMessage) => {
     const tempConn = { status: 'pending', sender_id: currentUser.id, receiver_id: userId }
@@ -123,9 +130,12 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
 
   const handleBreakLink = async () => {
     if (window.confirm("Es-tu sûr de vouloir couper le lien ?")) {
+      // On supprime localement tout de suite (optimiste)
+      const connId = connection.id
       setConnection(null)
       setView('PROFILE')
-      await supabase.from('connections').delete().eq('id', connection.id)
+      // Puis on supprime en base
+      await supabase.from('connections').delete().eq('id', connId)
     }
   }
 
@@ -195,7 +205,6 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
               
               <div className="text-center relative">
                 <div className="w-24 h-24 bg-gradient-to-br from-philo-primary to-philo-secondary rounded-full mx-auto flex items-center justify-center mb-3 shadow-lg shadow-purple-500/20 relative">
-                   {/* Badge Avatar */}
                    {unreadCount > 0 && (
                      <div className="absolute top-0 right-0 w-6 h-6 bg-red-500 rounded-full border-2 border-slate-900 flex items-center justify-center text-white text-[10px] font-bold animate-bounce z-20">
                        {unreadCount}
@@ -281,7 +290,6 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
 
                 {isAccepted && (
                    <button onClick={openChat} className="w-full py-3 bg-philo-primary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 relative">
-                    {/* LE BADGE DE NOTIF - Corrigé et visible */}
                     {unreadCount > 0 && (
                         <span className="absolute -top-3 -right-2 bg-red-500 text-white text-xs w-6 h-6 rounded-full flex items-center justify-center border-2 border-slate-900 animate-bounce z-40 shadow-lg">
                           {unreadCount}
