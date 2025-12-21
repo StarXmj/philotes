@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
-import { generateProfileVector } from '../lib/ai' // <--- 1. IMPORT AJOUTÉ
+import { generateProfileVector } from '../lib/ai' 
+import { useAuth } from '../contexts/AuthContext' // <--- 1. IMPORT ESSENTIEL POUR LA MISE À JOUR GLOBALE
 import { ArrowLeft, Save, GraduationCap, MapPin, User, BrainCircuit, Loader2, Sparkles, Lock, KeyRound, ShieldCheck, AlertCircle, CheckCircle, Image as ImageIcon, Check, Trash2, Eye, EyeOff } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -14,6 +15,10 @@ const AVATARS_LIST = [
 
 export default function Profile() {
   const navigate = useNavigate()
+  
+  // 2. RÉCUPÉRATION DE LA FONCTION DE MISE À JOUR GLOBALE
+  const { updateProfile } = useAuth() 
+
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [user, setUser] = useState(null)
@@ -60,12 +65,14 @@ export default function Profile() {
     return score
   }
   const strength = getPasswordStrength(passwordData.new)
+  
   const getStrengthColor = () => {
     if (strength === 0) return 'bg-gray-600'
     if (strength <= 2) return 'bg-red-500'
     if (strength === 3) return 'bg-yellow-500'
     return 'bg-green-500'
   }
+  
   const getStrengthLabel = () => {
     if (strength <= 2) return 'Faible'
     if (strength === 3) return 'Moyen'
@@ -160,7 +167,7 @@ export default function Profile() {
     if (fileName) await supabase.storage.from('profiles').remove([fileName])
   }
 
-  // --- SAUVEGARDE (AVEC RECALCUL VECTORIEL) ---
+  // --- SAUVEGARDE (AVEC RECALCUL VECTORIEL & MISE À JOUR GLOBALE) ---
   const handleSaveProfile = async (e) => {
     e.preventDefault()
     setSaving(true)
@@ -188,11 +195,9 @@ export default function Profile() {
         }
 
         // --- 2. CALCUL DU VECTEUR IA ---
-        // On reconstruit la phrase narrative avec les NOUVELLES données du formulaire
         const vibesText = myVibes.map(v => v.answer).join(". ")
         const narrative = `Étudiant en ${selectedEtude} ${selectedTheme}, ${selectedNom}. Campus : ${selectedLieu}. Genre : ${sexe}. Personnalité : ${vibesText}.`
         
-        // On génère le vecteur (attention, ça peut prendre 1-2 sec)
         const vector = await generateProfileVector(narrative)
 
         // --- 3. MISE À JOUR SQL ---
@@ -200,10 +205,17 @@ export default function Profile() {
             pseudo, sexe, type_diplome: selectedEtude, domaine: selectedTheme, 
             annee_etude: selectedAnnee, intitule: selectedNom, parcours: selectedParcours || null, 
             etudes_lieu: selectedLieu, avatar_public: selectedPublicAvatar, avatar_prive: finalPrivateUrl,
-            embedding: vector // <--- Insertion du nouveau vecteur
+            embedding: vector 
         }).eq('id', user.id)
 
         if (error) throw error
+
+        // --- 4. MISE À JOUR DU CONTEXTE GLOBAL (Le Fix !) ---
+        // On récupère le profil à jour pour synchroniser toute l'appli
+        const { data: freshProfile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+        if (freshProfile) {
+            updateProfile(freshProfile) // Met à jour le contexte et le localStorage
+        }
         
         setHasChanges(false)
         alert("Profil et Univers IA mis à jour avec succès !")
