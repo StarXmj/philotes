@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
+import { generateProfileVector } from '../lib/ai' // <--- 1. IMPORT AJOUTÉ
 import { ArrowLeft, Save, GraduationCap, MapPin, User, BrainCircuit, Loader2, Sparkles, Lock, KeyRound, ShieldCheck, AlertCircle, CheckCircle, Image as ImageIcon, Check, Trash2, Eye, EyeOff } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -156,11 +157,10 @@ export default function Profile() {
     if (!oldUrl) return
     const parts = oldUrl.split('/')
     const fileName = parts[parts.length - 1]
-    // On appelle la suppression (SQL policy requise)
     if (fileName) await supabase.storage.from('profiles').remove([fileName])
   }
 
-  // --- SAUVEGARDE ---
+  // --- SAUVEGARDE (AVEC RECALCUL VECTORIEL) ---
   const handleSaveProfile = async (e) => {
     e.preventDefault()
     setSaving(true)
@@ -170,7 +170,7 @@ export default function Profile() {
         
         // A. Nouvelle photo
         if (realPhotoFile) {
-            await deleteOldAvatar() // Supprime l'ancienne
+            await deleteOldAvatar()
             const fileExt = realPhotoFile.name.split('.').pop()
             const fileName = `${user.id}-${Date.now()}.${fileExt}`
             const { error: uploadError } = await supabase.storage.from('profiles').upload(fileName, realPhotoFile)
@@ -178,7 +178,7 @@ export default function Profile() {
             
             const { data: { publicUrl } } = supabase.storage.from('profiles').getPublicUrl(fileName)
             finalPrivateUrl = publicUrl
-            oldPhotoUrlRef.current = publicUrl // Mise à jour ref
+            oldPhotoUrlRef.current = publicUrl
         } 
         // B. Suppression photo
         else if (currentRealPhotoUrl === null && oldPhotoUrlRef.current) {
@@ -187,17 +187,26 @@ export default function Profile() {
             oldPhotoUrlRef.current = null
         }
 
+        // --- 2. CALCUL DU VECTEUR IA ---
+        // On reconstruit la phrase narrative avec les NOUVELLES données du formulaire
+        const vibesText = myVibes.map(v => v.answer).join(". ")
+        const narrative = `Étudiant en ${selectedEtude} ${selectedTheme}, ${selectedNom}. Campus : ${selectedLieu}. Genre : ${sexe}. Personnalité : ${vibesText}.`
+        
+        // On génère le vecteur (attention, ça peut prendre 1-2 sec)
+        const vector = await generateProfileVector(narrative)
+
+        // --- 3. MISE À JOUR SQL ---
         const { error } = await supabase.from('profiles').update({
             pseudo, sexe, type_diplome: selectedEtude, domaine: selectedTheme, 
             annee_etude: selectedAnnee, intitule: selectedNom, parcours: selectedParcours || null, 
-            etudes_lieu: selectedLieu, avatar_public: selectedPublicAvatar, avatar_prive: finalPrivateUrl
+            etudes_lieu: selectedLieu, avatar_public: selectedPublicAvatar, avatar_prive: finalPrivateUrl,
+            embedding: vector // <--- Insertion du nouveau vecteur
         }).eq('id', user.id)
 
         if (error) throw error
         
         setHasChanges(false)
-        alert("Profil mis à jour avec succès !")
-        // ON RESTE SUR LA PAGE (Pas de navigate)
+        alert("Profil et Univers IA mis à jour avec succès !")
 
     } catch (error) {
         console.error(error)
@@ -223,11 +232,9 @@ export default function Profile() {
 
   const handleRetakeQuiz = () => {
       if (hasChanges && !window.confirm("Sauvegarder avant de partir ?")) return
-      // Mode spécial pour ne faire QUE le quiz
       navigate('/onboarding', { state: { mode: 'quiz_only' } })
   }
 
-  // Listes déroulantes
   const etudesOpts = [...new Set(formationsData.map(f => f.etude))].filter(Boolean).sort()
   const themesOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude).map(f => f.theme))].filter(Boolean).sort()
   const anneesOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude && f.theme === selectedTheme).map(f => f.annee))].filter(Boolean).sort()
@@ -314,7 +321,7 @@ export default function Profile() {
             </div>
           </div>
 
-          {/* FAC (Identique au précédent mais avec markChanged) */}
+          {/* FAC */}
           <div className="bg-white/5 p-6 rounded-3xl border border-white/10 shadow-lg">
             <div className="flex items-center gap-2 mb-6 text-philo-secondary"><GraduationCap size={24} /> <h2 className="font-bold uppercase text-sm tracking-wider">Ma Fac</h2></div>
             <div className="space-y-4">
@@ -391,7 +398,7 @@ export default function Profile() {
           </div>
         </div>
 
-        {/* SECU (Code inchangé) */}
+        {/* SECU */}
         <div className="bg-white/5 border border-white/10 rounded-3xl p-6 shadow-lg">
             <div className="flex items-center gap-3 mb-4 text-red-400"><ShieldCheck size={24} /> <h2 className="font-bold uppercase text-sm tracking-wider">Sécurité</h2></div>
             {!isEditingPassword ? (
