@@ -5,3 +5,23 @@ body {
   background-color: #0f172a; 
   color: white;
 }
+
+/* DANS src/index.css */
+
+/* Animation Orbitale (GPU optimisé) */
+@keyframes orbit-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes orbit-counter-spin {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+/* Classes utilitaires pour l'accélération matérielle */
+.gpu-accelerated {
+  will-change: transform;
+  transform: translateZ(0); /* Force le passage sur le GPU */
+  backface-visibility: hidden;
+}

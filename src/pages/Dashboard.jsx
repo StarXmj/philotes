@@ -1,123 +1,98 @@
-import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../lib/supabaseClient'
-import { motion, AnimatePresence } from 'framer-motion'
-import { User, LogOut, UserCircle, Magnet, Users, RotateCcw, GitCommitVertical } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { UserCircle, LogOut, Filter, X, List, ChevronLeft, ChevronRight, PanelLeftOpen, PanelRightOpen, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+
+import ConstellationView from '../components/dashboard/ConstellationView'
+import Constellation3D from '../components/dashboard/Constellation3D'
+
+import DashboardFilters from '../components/dashboard/DashboardFilters'
+import ListView from '../components/dashboard/ListView'
 import UserProfileSidebar from '../components/dashboard/UserProfileSidebar'
 
-// --- COMPOSANTS ORBITAUX (Visuel) ---
-const OrbitalRing = ({ radius, duration, children, reverse = false }) => {
-  return (
-    <div className="absolute flex items-center justify-center" style={{ width: radius * 2, height: radius * 2 }}>
-       <div className="absolute inset-0 rounded-full border border-white/5" />
-       <motion.div 
-         className="absolute inset-0 w-full h-full"
-         animate={{ rotate: reverse ? -360 : 360 }}
-         transition={{ duration: duration, repeat: Infinity, ease: "linear" }}
-       >
-          {children}
-       </motion.div>
-    </div>
-  )
-}
-
-const Planet = ({ angle, radius, duration, reverse = false, children }) => {
-    const x = Math.cos(angle) * radius + radius
-    const y = Math.sin(angle) * radius + radius
-    return (
-        <div className="absolute flex items-center justify-center" style={{ left: x, top: y, width: 0, height: 0 }}>
-            <motion.div animate={{ rotate: reverse ? 360 : -360 }} transition={{ duration: duration, repeat: Infinity, ease: "linear" }}>
-                {children}
-            </motion.div>
-        </div>
-    )
-}
-
-// --- COMPOSANT DUAL SLIDER (Filtre) ---
-const DualRangeSlider = ({ min, max, onChange }) => {
-    const [minVal, setMinVal] = useState(min)
-    const [maxVal, setMaxVal] = useState(max)
-    const getPercent = useCallback((value) => Math.round(((value - 0) / (100 - 0)) * 100), [])
-
-    useEffect(() => { setMinVal(min); setMaxVal(max); }, [min, max])
-
-    const handleMinChange = (e) => {
-        const value = Math.min(Number(e.target.value), maxVal - 1)
-        setMinVal(value)
-        onChange(value, maxVal)
-    }
-
-    const handleMaxChange = (e) => {
-        const value = Math.max(Number(e.target.value), minVal + 1)
-        setMaxVal(value)
-        onChange(minVal, value)
-    }
-
-    return (
-        <div className="relative w-full h-8 flex items-center">
-            <input 
-                type="range" min="0" max="100" value={minVal} onChange={handleMinChange}
-                className="absolute z-20 h-0 w-full opacity-0 cursor-pointer pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4"
-            />
-            <input 
-                type="range" min="0" max="100" value={maxVal} onChange={handleMaxChange}
-                className="absolute z-20 h-0 w-full opacity-0 cursor-pointer pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:h-4"
-            />
-            <div className="relative w-full h-1.5 bg-slate-700 rounded-full z-0">
-                <div 
-                    className="absolute h-full bg-philo-primary rounded-full z-10"
-                    style={{ left: `${getPercent(minVal)}%`, width: `${getPercent(maxVal) - getPercent(minVal)}%` }}
-                />
-                <div className="absolute w-4 h-4 bg-white border-2 border-philo-primary rounded-full -top-1.5 -ml-2 z-10 shadow cursor-grab pointer-events-none" style={{ left: `${getPercent(minVal)}%` }} />
-                <div className="absolute w-4 h-4 bg-white border-2 border-philo-primary rounded-full -top-1.5 -ml-2 z-10 shadow cursor-grab pointer-events-none" style={{ left: `${getPercent(maxVal)}%` }} />
-            </div>
-            <div className="absolute -bottom-5 left-0 text-[10px] text-gray-400 font-bold">{minVal}%</div>
-            <div className="absolute -bottom-5 right-0 text-[10px] text-gray-400 font-bold">{maxVal}%</div>
-        </div>
-    )
-}
-
-// --- PAGE DASHBOARD PRINCIPALE ---
 export default function Dashboard() {
   const navigate = useNavigate()
   const { user, profile: myProfile, loading: authLoading } = useAuth()
   
   const [matches, setMatches] = useState([])
   const [loadingMatches, setLoadingMatches] = useState(true)
-  const [selectedUser, setSelectedUser] = useState(null)
-  const [unreadCounts, setUnreadCounts] = useState({})
   
-  // Filtres UI
+  // --- ÉTAT DE SÉLECTION DÉCOUPLÉ ---
+  // selectedUser = La cible de la caméra 3D (Focus)
+  // isSidebarVisible = L'état d'ouverture du panneau latéral (UI)
+  const [selectedUser, setSelectedUser] = useState(null)
+  const [isSidebarVisible, setIsSidebarVisible] = useState(false)
+  
+  const [is3D, setIs3D] = useState(true)
+
+  // Filtres
   const [showFriends, setShowFriends] = useState(true)
   const [matchRange, setMatchRange] = useState([0, 100])
   const [isOppositeMode, setIsOppositeMode] = useState(false)
-  
-  const myProfileRef = useRef(null)
-  useEffect(() => { myProfileRef.current = myProfile }, [myProfile])
+  const [unreadCounts, setUnreadCounts] = useState({})
+  const [searchQuery, setSearchQuery] = useState('')
 
-  // 1. CHARGEMENT DES MATCHS (AVEC ALGO INTELLIGENT)
+  // États UI
+  const [showMobileFilters, setShowMobileFilters] = useState(false)
+  const [showMobileList, setShowMobileList] = useState(false)
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
+
+  // --- LOGIQUE INTELLIGENTE MOBILE VS PC ---
+  const handleUserSelect = (user) => {
+    // 1. On ferme la liste mobile pour dégager la vue
+    setShowMobileList(false)
+    
+    // 2. On définit la cible (La caméra commence à zoomer immédiatement)
+    setSelectedUser(user)
+
+    // 3. Gestion du délai selon l'appareil
+    if (window.innerWidth < 768) {
+        // MOBILE : On cache d'abord le sidebar pour voir l'animation
+        setIsSidebarVisible(false)
+        
+        // On attend 1.5s (le temps que la caméra arrive) avant d'afficher le profil
+        setTimeout(() => {
+            setIsSidebarVisible(true)
+        }, 1500)
+    } else {
+        // PC : On affiche tout de suite (comme avant)
+        setIsSidebarVisible(true)
+    }
+  }
+
+  // Fonction de fermeture propre
+  const handleCloseProfile = () => {
+      setIsSidebarVisible(false)
+      // Petit délai pour laisser le panneau disparaitre avant de dé-zoomer
+      setTimeout(() => setSelectedUser(null), 300)
+  }
+
+  // 1. DATA LOADING
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
 
+    if (!myProfile.embedding) {
+        setLoadingMatches(false)
+        return
+    }
+
     const loadMatches = async () => {
-      const safetyTimer = setTimeout(() => setLoadingMatches(false), 5000)
       try {
-        if (myProfile.embedding) {
-          // --- CHANGEMENT CLÉ ICI : APPEL DU NOUVEL ALGO RPC ---
-          const { data: matchedUsers, error } = await supabase.rpc('find_best_matches', {
+          const { data: matchedUsers, error: rpcError } = await supabase.rpc('find_best_matches', {
             p_embedding: myProfile.embedding,
-            p_match_threshold: 0.01,  // On ratisse large, le tri se fait après
-            p_gender_filter: null,    // null = tout le monde (tu pourras connecter ça à un filtre UI plus tard)
+            p_match_threshold: 0, 
+            p_gender_filter: null,
             p_my_id: user.id,
-            p_my_domaine: myProfile.domaine || '' // Pour le bonus diversité
+            p_my_domaine: myProfile.domaine || '' 
           })
 
-          if (error) console.error("Erreur RPC:", error)
+          if (rpcError) throw rpcError
 
           if (matchedUsers) {
-            // Récupération des connexions existantes (amis, en attente...)
             const { data: allMyConnections } = await supabase
               .from('connections')
               .select('*')
@@ -130,27 +105,25 @@ export default function Dashboard() {
                   (c.sender_id === user.id && c.receiver_id === match.id) ||
                   (c.receiver_id === user.id && c.sender_id === match.id)
                 )
-                // On s'assure d'avoir un score utilisable (fallback sur similarity si final_score manque)
                 return { 
                     ...match, 
-                    score: match.final_score || match.similarity, // C'est ce score qui pilotera les orbites
+                    score: match.final_score || match.similarity,
+                    score_global: match.score_global,             
                     connection: conn || null 
                 }
               })
             setMatches(matchesWithStatus)
           }
-        }
       } catch (error) { 
-          console.error("Exception loading matches:", error) 
+          console.error("Erreur chargement:", error) 
       } finally { 
-          clearTimeout(safetyTimer)
           setLoadingMatches(false) 
       }
     }
     loadMatches()
   }, [user, myProfile, authLoading])
 
-  // 2. REALTIME (Mises à jour des connexions en direct)
+  // 2. REALTIME
   useEffect(() => {
     if (!user) return
     const channel = supabase.channel('dashboard-room')
@@ -162,80 +135,64 @@ export default function Dashboard() {
             return m
         }))
     }
-    channel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections', filter: `sender_id=eq.${user.id}` }, handleConnectionChange)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections', filter: `receiver_id=eq.${user.id}` }, handleConnectionChange)
-      .subscribe()
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'connections', filter: `sender_id=eq.${user.id}` }, handleConnectionChange).subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [user])
 
-  const handleLogout = async () => await supabase.auth.signOut() 
-
-  // 3. LOGIQUE DE FILTRAGE ET D'ORBITES (Cerveau du Dashboard)
+  // 3. FILTRAGE
   const processedMatches = useMemo(() => {
     let filtered = matches
-
-    // A. Filtre "Mes Liens"
-    if (!showFriends) {
-        filtered = filtered.filter(m => m.connection?.status !== 'accepted')
-    }
-
-    // B. Filtre par Intervalle de Score
+    if (!showFriends) filtered = filtered.filter(m => m.connection?.status !== 'accepted')
     const [min, max] = matchRange
     filtered = filtered.filter(m => {
-        const isFriend = m.connection?.status === 'accepted'
-        // Les amis restent toujours visibles si le toggle est activé
-        if (isFriend) return true 
-        
-        const pct = m.score * 100
+        if (m.connection?.status === 'accepted') return true 
+        const pct = (m.score_global || m.score * 100)
         return pct >= min && pct <= max
     })
-
-    // C. Tri (Normal ou Inversé pour le mode "Opposés")
-    // On trie sur 'score' qui est le final_score (hybride)
+    if (searchQuery.trim() !== '') {
+        const query = searchQuery.toLowerCase()
+        filtered = filtered.filter(m => m.pseudo?.toLowerCase().includes(query))
+    }
     filtered.sort((a, b) => isOppositeMode ? a.score - b.score : b.score - a.score)
+    return filtered
+  }, [matches, showFriends, matchRange, isOppositeMode, searchQuery])
 
-    // D. Répartition en Orbites
-    const categorized = { orbit1: [], orbit2: [], orbit3: [], orbit4: [] }
-    
-    filtered.forEach(m => {
-        const percent = m.score * 100
-        const isFriend = m.connection?.status === 'accepted'
+  const handleLogout = async () => await supabase.auth.signOut() 
 
-        // Orbite 1 : Amis proches (Cercle intime)
-        if (isFriend) {
-            categorized.orbit1.push(m)
-        } 
-        // Orbite 2 : Super Matchs (>85% - inclut le bonus diversité !)
-        else if (percent >= 85) {
-            categorized.orbit2.push(m)
-        } 
-        // Orbite 3 : Bons Matchs (65-85%)
-        else if (percent >= 65) {
-            categorized.orbit3.push(m)
-        } 
-        // Orbite 4 : Explorateurs lointains
-        else {
-            categorized.orbit4.push(m)
-        }
-    })
+  if (authLoading || loadingMatches) return <div className="min-h-screen bg-philo-dark flex flex-col gap-4 items-center justify-center text-white p-4"><p className="animate-pulse text-xl font-bold">Chargement de la galaxie...</p></div>
 
-    return categorized
-  }, [matches, showFriends, matchRange, isOppositeMode])
-
-  if (authLoading || loadingMatches) return (
-      <div className="min-h-screen bg-philo-dark flex flex-col items-center justify-center text-white gap-4">
-          <div className="w-16 h-16 border-4 border-philo-primary border-t-transparent rounded-full animate-spin"></div>
-          <p className="animate-pulse text-gray-400">Scan du campus en cours...</p>
+  const SearchBar = () => (
+      <div className="px-4 pb-4">
+          <div className="relative group">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-philo-primary transition" size={16} />
+            <input 
+                type="text" 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Chercher un étudiant..." 
+                className="w-full bg-slate-800/50 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white focus:outline-none focus:border-philo-primary focus:bg-slate-800 transition shadow-inner placeholder:text-gray-600"
+            />
+            {searchQuery && (<button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"><X size={14} /></button>)}
+          </div>
       </div>
   )
 
   return (
-    <div className="min-h-screen bg-philo-dark text-white p-4 relative overflow-hidden flex flex-col">
+    <div className="h-screen bg-philo-dark text-white p-4 relative overflow-hidden flex flex-col">
       
       {/* NAVBAR */}
-      <div className="flex justify-between items-center z-30 w-full max-w-6xl mx-auto py-4 px-4 relative">
+      <div className="flex justify-between items-center z-30 w-full max-w-full mx-auto py-2 px-4 md:px-10 shrink-0 relative">
         <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
+        
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center bg-slate-800 rounded-full p-1 border border-white/10 shadow-lg">
+            <button onClick={() => setIs3D(false)} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-300 z-10 ${!is3D ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
+                2D {!is3D && <motion.div layoutId="activeTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}
+            </button>
+            <button onClick={() => setIs3D(true)} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-300 z-10 ${is3D ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
+                3D {is3D && <motion.div layoutId="activeTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}
+            </button>
+        </div>
+
         <div className="flex gap-2 items-center">
           <button onClick={() => navigate('/profile')} className="rounded-full hover:opacity-80 transition overflow-hidden border border-white/20 w-10 h-10">
              {myProfile?.avatar_prive ? <img src={myProfile.avatar_prive} className="w-full h-full object-cover" /> : 
@@ -246,167 +203,90 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <div className="flex-1 flex relative">
+      <div className="flex-1 flex relative overflow-hidden min-h-0">
           
-          {/* --- SIDEBAR FILTRES --- */}
-          <div className="absolute left-0 top-10 z-30 flex flex-col gap-6 p-4 w-64">
-              
-              {/* Toggle Amis */}
-              <div className="bg-slate-900/60 backdrop-blur-md p-4 rounded-2xl border border-white/10">
-                  <label className="flex items-center gap-3 cursor-pointer group select-none">
-                      <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition ${showFriends ? 'bg-philo-primary border-philo-primary' : 'border-gray-500 group-hover:border-white'}`}>
-                          {showFriends && <Users size={14} className="text-white" />}
-                      </div>
-                      <input type="checkbox" className="hidden" checked={showFriends} onChange={e => setShowFriends(e.target.checked)} />
-                      <span className="text-sm font-bold text-gray-300 group-hover:text-white">Mes liens confirmés</span>
-                  </label>
-              </div>
+          {/* SIDEBAR GAUCHE */}
+          <motion.div initial={{ x: 0 }} animate={{ x: isLeftSidebarOpen ? 0 : -300 }} className="hidden md:block absolute left-0 top-0 z-20 h-full w-64 border-r border-white/5 bg-philo-dark/50 backdrop-blur-sm">
+             <div className="flex justify-between items-center p-4 border-b border-white/10">
+                 <h2 className="text-sm font-bold uppercase text-gray-400">Filtres</h2>
+                 <button onClick={() => setIsLeftSidebarOpen(false)} className="p-1 hover:bg-white/10 rounded text-gray-400 hover:text-white transition"><ChevronLeft size={18}/></button>
+             </div>
+             <div className="overflow-y-auto h-[calc(100%-60px)]"><DashboardFilters showFriends={showFriends} setShowFriends={setShowFriends} setMatchRange={setMatchRange} isOppositeMode={isOppositeMode} setIsOppositeMode={setIsOppositeMode}/></div>
+          </motion.div>
 
-              {/* Slider Intervalle */}
-              <div className="bg-slate-900/60 backdrop-blur-md p-4 rounded-2xl border border-white/10 pb-8">
-                  <div className="flex justify-between mb-4">
-                      <span className="text-xs font-bold text-gray-400 uppercase flex items-center gap-2"><GitCommitVertical size={12}/> Compatibilité</span>
-                  </div>
-                  <div className="px-2">
-                     <DualRangeSlider min={0} max={100} onChange={(min, max) => setMatchRange([min, max])} />
-                  </div>
-              </div>
+          {/* SIDEBAR DROITE */}
+          <motion.div initial={{ x: 0 }} animate={{ x: isRightSidebarOpen ? 0 : 450 }} className="hidden md:block absolute right-0 top-0 z-20 h-full w-80 lg:w-96 border-l border-white/10 bg-slate-900/30 backdrop-blur-sm">
+             <div className="h-full flex flex-col">
+                <div className="p-4 border-b border-white/10 shrink-0 flex justify-between items-center mb-2">
+                    <h3 className="text-sm font-bold uppercase text-gray-400 flex items-center gap-2"><List size={14}/> Résultats ({processedMatches.length})</h3>
+                    <button onClick={() => setIsRightSidebarOpen(false)} className="p-1 hover:bg-white/10 rounded text-gray-400 hover:text-white transition"><ChevronRight size={18}/></button>
+                </div>
+                <SearchBar />
+                <div className="flex-1 overflow-hidden"><ListView matches={processedMatches} onSelectUser={handleUserSelect} /></div>
+             </div>
+          </motion.div>
 
-              {/* Actions */}
-              <div className="flex gap-2">
-                  <button 
-                    onClick={() => setIsOppositeMode(!isOppositeMode)}
-                    className={`flex-1 py-3 rounded-xl border flex flex-col items-center gap-1 transition ${isOppositeMode ? 'bg-pink-500/20 border-pink-500 text-pink-300' : 'bg-slate-900/60 border-white/10 text-gray-400 hover:bg-slate-800'}`}
-                  >
-                      <Magnet size={18} className={isOppositeMode ? "rotate-180" : ""} />
-                      <span className="text-[10px] font-bold uppercase text-center leading-tight">Opposés<br/>s'attirent</span>
-                  </button>
+          {/* BOUTONS FLOTTANTS */}
+          {!isLeftSidebarOpen && (<motion.button initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsLeftSidebarOpen(true)} className="hidden md:flex absolute left-4 top-4 z-30 p-2 bg-slate-800/80 backdrop-blur-md border border-white/10 rounded-lg text-white shadow-lg"><PanelLeftOpen size={20}/></motion.button>)}
+          {!isRightSidebarOpen && (<motion.button initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsRightSidebarOpen(true)} className="hidden md:flex absolute right-4 top-4 z-30 p-2 bg-slate-800/80 backdrop-blur-md border border-white/10 rounded-lg text-white shadow-lg"><PanelRightOpen size={20}/></motion.button>)}
 
-                  <button 
-                    onClick={() => { setShowFriends(true); setMatchRange([0, 100]); setIsOppositeMode(false); }}
-                    className="px-3 rounded-xl bg-slate-900/60 border border-white/10 text-gray-400 hover:text-white hover:bg-slate-800 transition"
-                    title="Réinitialiser"
-                  >
-                      <RotateCcw size={18} />
-                  </button>
-              </div>
+          {/* ZONE CENTRALE */}
+          <div className={`flex-1 relative overflow-hidden w-full h-full transition-all duration-300 ease-in-out ${isLeftSidebarOpen ? 'md:pl-64' : 'md:pl-0'} ${isRightSidebarOpen ? 'md:pr-80 lg:pr-96' : 'md:pr-0'}`}>
+             {is3D ? (
+                <Constellation3D 
+                    matches={processedMatches} 
+                    myProfile={myProfile} 
+                    onSelectUser={handleUserSelect} // On utilise le handler intelligent
+                    selectedUser={selectedUser} 
+                />
+             ) : (
+                <ConstellationView 
+                    matches={processedMatches} 
+                    myProfile={myProfile} 
+                    onSelectUser={handleUserSelect} 
+                />
+             )}
           </div>
 
-          {/* --- LA GALAXIE (VISUALISATION) --- */}
-          <div className="flex-1 relative flex items-center justify-center overflow-visible min-h-[600px]">
-             
-             {/* Soleil (Moi) */}
-             <motion.div 
-                animate={{ y: [0, -15, 0] }}
-                transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-                className="absolute z-20 w-28 h-28 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary p-1 shadow-[0_0_50px_rgba(139,92,246,0.5)]"
-             >
-                <div className="w-full h-full rounded-full overflow-hidden border-4 border-slate-900 bg-slate-900">
-                    {myProfile?.avatar_prive ? <img src={myProfile.avatar_prive} className="w-full h-full object-cover" /> : 
-                     myProfile?.avatar_public ? <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover" /> : null}
-                </div>
-                <div className="absolute -bottom-8 left-1/2 -translate-x-1/2 whitespace-nowrap bg-black/60 px-3 py-1 rounded-full text-xs font-bold backdrop-blur-sm border border-white/10">
-                    Moi
-                </div>
-             </motion.div>
-
-             {/* ORBITES */}
-             {processedMatches.orbit1.length > 0 && (
-                 <OrbitalRing radius={140} duration={30}>
-                     {processedMatches.orbit1.map((match, i) => (
-                         <Planet key={match.id} radius={140} angle={(i / processedMatches.orbit1.length) * 2 * Math.PI} duration={30}>
-                             <MatchNode match={match} onClick={setSelectedUser} />
-                         </Planet>
-                     ))}
-                 </OrbitalRing>
-             )}
-
-             {processedMatches.orbit2.length > 0 && (
-                 <OrbitalRing radius={220} duration={50} reverse>
-                     {processedMatches.orbit2.map((match, i) => (
-                         <Planet key={match.id} radius={220} angle={(i / processedMatches.orbit2.length) * 2 * Math.PI} duration={50} reverse>
-                             <MatchNode match={match} onClick={setSelectedUser} />
-                         </Planet>
-                     ))}
-                 </OrbitalRing>
-             )}
-
-             {processedMatches.orbit3.length > 0 && (
-                 <OrbitalRing radius={300} duration={80}>
-                     {processedMatches.orbit3.map((match, i) => (
-                         <Planet key={match.id} radius={300} angle={(i / processedMatches.orbit3.length) * 2 * Math.PI} duration={80}>
-                             <MatchNode match={match} onClick={setSelectedUser} />
-                         </Planet>
-                     ))}
-                 </OrbitalRing>
-             )}
-
-              {processedMatches.orbit4.length > 0 && (
-                 <OrbitalRing radius={400} duration={120} reverse>
-                     {processedMatches.orbit4.map((match, i) => (
-                         <Planet key={match.id} radius={400} angle={(i / processedMatches.orbit4.length) * 2 * Math.PI} duration={120} reverse>
-                             <MatchNode match={match} onClick={setSelectedUser} />
-                         </Planet>
-                     ))}
-                 </OrbitalRing>
-             )}
-          </div>
+          {/* MOBILE BOUTONS */}
+          <div className="md:hidden absolute top-4 left-0 z-20"><button onClick={() => setShowMobileFilters(true)} className="p-3 bg-slate-800/80 backdrop-blur-md border border-white/10 rounded-r-xl text-white"><Filter size={24} /></button></div>
+          <div className="md:hidden absolute top-4 right-0 z-20"><button onClick={() => setShowMobileList(true)} className="p-3 bg-slate-800/80 backdrop-blur-md border border-white/10 rounded-l-xl text-white"><List size={24} /></button></div>
       </div>
 
-      {/* MODALE SIDEBAR PROFILE */}
+      {/* DRAWERS MOBILE */}
       <AnimatePresence>
-        {selectedUser && (
-          <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedUser(null)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
-            <UserProfileSidebar 
-              userId={selectedUser.id} 
-              similarity={selectedUser.score} // On passe le score final
-              initialUnreadCount={unreadCounts[selectedUser.id] || 0}
-              onClose={() => setSelectedUser(null)} 
-              onChatStatusChange={() => {}} 
-            />
-          </>
-        )}
+          {showMobileFilters && (<motion.div className="fixed inset-0 z-50 flex"><div className="fixed inset-0 bg-black/60" onClick={() => setShowMobileFilters(false)}/><motion.div className="relative w-3/4 max-w-xs bg-slate-900 p-6 shadow-2xl h-full"><DashboardFilters showFriends={showFriends} setShowFriends={setShowFriends} setMatchRange={setMatchRange} isOppositeMode={isOppositeMode} setIsOppositeMode={setIsOppositeMode}/></motion.div></motion.div>)}
+      </AnimatePresence>
+      <AnimatePresence>
+          {showMobileList && (
+            <motion.div className="fixed inset-0 z-50 flex justify-end">
+                <div className="fixed inset-0 bg-black/60" onClick={() => setShowMobileList(false)}/>
+                <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 25, stiffness: 300 }} className="relative w-3/4 max-w-md bg-slate-900 flex flex-col shadow-2xl h-full">
+                    <div className="p-4 border-b border-white/10 flex justify-between items-center bg-slate-900/95">
+                        <h2 className="text-xl font-bold flex items-center gap-2"><List size={20}/> Liste ({processedMatches.length})</h2>
+                        <button onClick={() => setShowMobileList(false)}><X size={24}/></button>
+                    </div>
+                    <div className="pt-4"><SearchBar /></div>
+                    <div className="flex-1 overflow-hidden"><ListView matches={processedMatches} onSelectUser={handleUserSelect}/></div>
+                </motion.div>
+            </motion.div>
+          )}
+      </AnimatePresence>
+
+      {/* SIDEBAR PROFIL : NE S'OUVRE QUE SI 'isSidebarVisible' EST TRUE */}
+      <AnimatePresence>
+          {(selectedUser && isSidebarVisible) && (
+              <>
+                <div className="fixed inset-0 bg-black/60 z-50" onClick={handleCloseProfile} />
+                <UserProfileSidebar 
+                    userId={selectedUser.id} 
+                    similarity={selectedUser.score} 
+                    initialUnreadCount={unreadCounts[selectedUser.id] || 0} 
+                    onClose={handleCloseProfile} 
+                />
+              </>
+          )}
       </AnimatePresence>
     </div>
   )
-}
-
-// --- SOUS-COMPOSANT VISUEL D'UN MATCH ---
-function MatchNode({ match, onClick }) {
-    const isFriend = match.connection?.status === 'accepted'
-    let borderColor = "border-white/20"
-    let shadow = ""
-    
-    // Visuel distinctif selon le score
-    const pct = match.score * 100
-
-    if (isFriend) {
-        borderColor = "border-philo-primary"
-        shadow = "shadow-[0_0_15px_rgba(139,92,246,0.4)]"
-    } else if (pct >= 90) {
-        borderColor = "border-green-400/80"
-        shadow = "shadow-[0_0_10px_rgba(74,222,128,0.3)]"
-    } else if (pct >= 75) {
-        borderColor = "border-blue-400/50"
-    }
-
-    return (
-        <div onClick={() => onClick(match)} className="relative group cursor-pointer">
-            <div className={`w-16 h-16 rounded-full bg-slate-900 border-2 ${borderColor} ${shadow} overflow-hidden hover:scale-110 transition duration-300 relative`}>
-                {isFriend && match.avatar_prive ? <img src={match.avatar_prive} className="w-full h-full object-cover"/> : 
-                 match.avatar_public ? <img src={`/avatars/${match.avatar_public}`} className="w-full h-full object-cover"/> : 
-                 <User className="text-gray-500 m-auto mt-4"/>}
-                 
-                 {/* Badge de score */}
-                 <div className={`absolute bottom-0 inset-x-0 text-[9px] font-bold text-center py-0.5 text-white ${pct >= 85 ? 'bg-gradient-to-r from-green-500 to-emerald-600' : 'bg-black/70'}`}>
-                     {Math.round(pct)}%
-                 </div>
-            </div>
-            {/* Tooltip Nom */}
-            <div className="absolute -top-8 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition bg-white text-black text-xs font-bold px-2 py-1 rounded-md whitespace-nowrap pointer-events-none z-50">
-                {match.pseudo}
-            </div>
-        </div>
-    )
 }
