@@ -111,7 +111,7 @@ export default function Dashboard() {
             p_match_threshold: 0.01,  // On ratisse large, le tri se fait après
             p_gender_filter: null,    // null = tout le monde (tu pourras connecter ça à un filtre UI plus tard)
             p_my_id: user.id,
-            p_my_filiere: myProfile.filiere || '' // Pour le bonus diversité
+            p_my_domaine: myProfile.domaine || '' // Pour le bonus diversité
           })
 
           if (error) console.error("Erreur RPC:", error)
