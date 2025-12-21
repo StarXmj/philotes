@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import UserProfileSidebar from '../components/dashboard/UserProfileSidebar'
 
-// --- COMPOSANTS ORBITAUX ---
+// --- COMPOSANTS ORBITAUX (Visuel) ---
 const OrbitalRing = ({ radius, duration, children, reverse = false }) => {
   return (
     <div className="absolute flex items-center justify-center" style={{ width: radius * 2, height: radius * 2 }}>
@@ -34,7 +34,7 @@ const Planet = ({ angle, radius, duration, reverse = false, children }) => {
     )
 }
 
-// --- COMPOSANT DUAL SLIDER ---
+// --- COMPOSANT DUAL SLIDER (Filtre) ---
 const DualRangeSlider = ({ min, max, onChange }) => {
     const [minVal, setMinVal] = useState(min)
     const [maxVal, setMaxVal] = useState(max)
@@ -78,6 +78,7 @@ const DualRangeSlider = ({ min, max, onChange }) => {
     )
 }
 
+// --- PAGE DASHBOARD PRINCIPALE ---
 export default function Dashboard() {
   const navigate = useNavigate()
   const { user, profile: myProfile, loading: authLoading } = useAuth()
@@ -87,6 +88,7 @@ export default function Dashboard() {
   const [selectedUser, setSelectedUser] = useState(null)
   const [unreadCounts, setUnreadCounts] = useState({})
   
+  // Filtres UI
   const [showFriends, setShowFriends] = useState(true)
   const [matchRange, setMatchRange] = useState([0, 100])
   const [isOppositeMode, setIsOppositeMode] = useState(false)
@@ -94,7 +96,7 @@ export default function Dashboard() {
   const myProfileRef = useRef(null)
   useEffect(() => { myProfileRef.current = myProfile }, [myProfile])
 
-  // --- CHARGEMENT ---
+  // 1. CHARGEMENT DES MATCHS (AVEC ALGO INTELLIGENT)
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
@@ -103,13 +105,19 @@ export default function Dashboard() {
       const safetyTimer = setTimeout(() => setLoadingMatches(false), 5000)
       try {
         if (myProfile.embedding) {
-          const { data: matchedUsers } = await supabase.rpc('match_students', {
-            query_embedding: myProfile.embedding,
-            match_threshold: 0.01, 
-            match_count: 50 
+          // --- CHANGEMENT CLÉ ICI : APPEL DU NOUVEL ALGO RPC ---
+          const { data: matchedUsers, error } = await supabase.rpc('find_best_matches', {
+            p_embedding: myProfile.embedding,
+            p_match_threshold: 0.01,  // On ratisse large, le tri se fait après
+            p_gender_filter: null,    // null = tout le monde (tu pourras connecter ça à un filtre UI plus tard)
+            p_my_id: user.id,
+            p_my_filiere: myProfile.filiere || '' // Pour le bonus diversité
           })
 
+          if (error) console.error("Erreur RPC:", error)
+
           if (matchedUsers) {
+            // Récupération des connexions existantes (amis, en attente...)
             const { data: allMyConnections } = await supabase
               .from('connections')
               .select('*')
@@ -122,18 +130,27 @@ export default function Dashboard() {
                   (c.sender_id === user.id && c.receiver_id === match.id) ||
                   (c.receiver_id === user.id && c.sender_id === match.id)
                 )
-                return { ...match, connection: conn || null }
+                // On s'assure d'avoir un score utilisable (fallback sur similarity si final_score manque)
+                return { 
+                    ...match, 
+                    score: match.final_score || match.similarity, // C'est ce score qui pilotera les orbites
+                    connection: conn || null 
+                }
               })
             setMatches(matchesWithStatus)
           }
         }
-      } catch (error) { console.error(error) } 
-      finally { clearTimeout(safetyTimer); setLoadingMatches(false); }
+      } catch (error) { 
+          console.error("Exception loading matches:", error) 
+      } finally { 
+          clearTimeout(safetyTimer)
+          setLoadingMatches(false) 
+      }
     }
     loadMatches()
   }, [user, myProfile, authLoading])
 
-  // --- REALTIME ---
+  // 2. REALTIME (Mises à jour des connexions en direct)
   useEffect(() => {
     if (!user) return
     const channel = supabase.channel('dashboard-room')
@@ -154,47 +171,51 @@ export default function Dashboard() {
 
   const handleLogout = async () => await supabase.auth.signOut() 
 
-  // --- LOGIQUE DE FILTRAGE (MISE À JOUR) ---
+  // 3. LOGIQUE DE FILTRAGE ET D'ORBITES (Cerveau du Dashboard)
   const processedMatches = useMemo(() => {
     let filtered = matches
 
-    // 1. Toggle "Mes Liens" (ON/OFF)
+    // A. Filtre "Mes Liens"
     if (!showFriends) {
-        // Si décoché, on retire purement et simplement les amis
         filtered = filtered.filter(m => m.connection?.status !== 'accepted')
     }
 
-    // 2. Filtre Intervalle (Sauf pour les amis)
+    // B. Filtre par Intervalle de Score
     const [min, max] = matchRange
     filtered = filtered.filter(m => {
         const isFriend = m.connection?.status === 'accepted'
-        
-        // MODIFICATION ICI :
-        // Si c'est un ami (et qu'il n'a pas été retiré par l'étape 1), on le garde TOUJOURS.
-        // L'intervalle ne s'applique que si ce n'est PAS un ami.
+        // Les amis restent toujours visibles si le toggle est activé
         if (isFriend) return true 
         
-        const pct = m.similarity * 100
+        const pct = m.score * 100
         return pct >= min && pct <= max
     })
 
-    // 3. Tri
-    filtered.sort((a, b) => isOppositeMode ? a.similarity - b.similarity : b.similarity - a.similarity)
+    // C. Tri (Normal ou Inversé pour le mode "Opposés")
+    // On trie sur 'score' qui est le final_score (hybride)
+    filtered.sort((a, b) => isOppositeMode ? a.score - b.score : b.score - a.score)
 
-    // 4. Zonage orbital
+    // D. Répartition en Orbites
     const categorized = { orbit1: [], orbit2: [], orbit3: [], orbit4: [] }
     
     filtered.forEach(m => {
-        const percent = m.similarity * 100
+        const percent = m.score * 100
         const isFriend = m.connection?.status === 'accepted'
 
+        // Orbite 1 : Amis proches (Cercle intime)
         if (isFriend) {
             categorized.orbit1.push(m)
-        } else if (percent >= 90) {
+        } 
+        // Orbite 2 : Super Matchs (>85% - inclut le bonus diversité !)
+        else if (percent >= 85) {
             categorized.orbit2.push(m)
-        } else if (percent >= 70) {
+        } 
+        // Orbite 3 : Bons Matchs (65-85%)
+        else if (percent >= 65) {
             categorized.orbit3.push(m)
-        } else {
+        } 
+        // Orbite 4 : Explorateurs lointains
+        else {
             categorized.orbit4.push(m)
         }
     })
@@ -202,7 +223,12 @@ export default function Dashboard() {
     return categorized
   }, [matches, showFriends, matchRange, isOppositeMode])
 
-  if (authLoading || loadingMatches) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white">Chargement de la galaxie...</div>
+  if (authLoading || loadingMatches) return (
+      <div className="min-h-screen bg-philo-dark flex flex-col items-center justify-center text-white gap-4">
+          <div className="w-16 h-16 border-4 border-philo-primary border-t-transparent rounded-full animate-spin"></div>
+          <p className="animate-pulse text-gray-400">Scan du campus en cours...</p>
+      </div>
+  )
 
   return (
     <div className="min-h-screen bg-philo-dark text-white p-4 relative overflow-hidden flex flex-col">
@@ -239,7 +265,7 @@ export default function Dashboard() {
               {/* Slider Intervalle */}
               <div className="bg-slate-900/60 backdrop-blur-md p-4 rounded-2xl border border-white/10 pb-8">
                   <div className="flex justify-between mb-4">
-                      <span className="text-xs font-bold text-gray-400 uppercase flex items-center gap-2"><GitCommitVertical size={12}/> Intervalle</span>
+                      <span className="text-xs font-bold text-gray-400 uppercase flex items-center gap-2"><GitCommitVertical size={12}/> Compatibilité</span>
                   </div>
                   <div className="px-2">
                      <DualRangeSlider min={0} max={100} onChange={(min, max) => setMatchRange([min, max])} />
@@ -266,7 +292,7 @@ export default function Dashboard() {
               </div>
           </div>
 
-          {/* --- LA GALAXIE --- */}
+          {/* --- LA GALAXIE (VISUALISATION) --- */}
           <div className="flex-1 relative flex items-center justify-center overflow-visible min-h-[600px]">
              
              {/* Soleil (Moi) */}
@@ -327,13 +353,14 @@ export default function Dashboard() {
           </div>
       </div>
 
+      {/* MODALE SIDEBAR PROFILE */}
       <AnimatePresence>
         {selectedUser && (
           <>
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setSelectedUser(null)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" />
             <UserProfileSidebar 
               userId={selectedUser.id} 
-              similarity={selectedUser.similarity} 
+              similarity={selectedUser.score} // On passe le score final
               initialUnreadCount={unreadCounts[selectedUser.id] || 0}
               onClose={() => setSelectedUser(null)} 
               onChatStatusChange={() => {}} 
@@ -345,16 +372,23 @@ export default function Dashboard() {
   )
 }
 
+// --- SOUS-COMPOSANT VISUEL D'UN MATCH ---
 function MatchNode({ match, onClick }) {
     const isFriend = match.connection?.status === 'accepted'
     let borderColor = "border-white/20"
     let shadow = ""
     
+    // Visuel distinctif selon le score
+    const pct = match.score * 100
+
     if (isFriend) {
         borderColor = "border-philo-primary"
         shadow = "shadow-[0_0_15px_rgba(139,92,246,0.4)]"
-    } else if (match.similarity >= 0.9) {
-        borderColor = "border-green-400/50"
+    } else if (pct >= 90) {
+        borderColor = "border-green-400/80"
+        shadow = "shadow-[0_0_10px_rgba(74,222,128,0.3)]"
+    } else if (pct >= 75) {
+        borderColor = "border-blue-400/50"
     }
 
     return (
@@ -363,10 +397,13 @@ function MatchNode({ match, onClick }) {
                 {isFriend && match.avatar_prive ? <img src={match.avatar_prive} className="w-full h-full object-cover"/> : 
                  match.avatar_public ? <img src={`/avatars/${match.avatar_public}`} className="w-full h-full object-cover"/> : 
                  <User className="text-gray-500 m-auto mt-4"/>}
-                 <div className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] font-bold text-center py-0.5 text-white">
-                     {Math.round(match.similarity * 100)}%
+                 
+                 {/* Badge de score */}
+                 <div className={`absolute bottom-0 inset-x-0 text-[9px] font-bold text-center py-0.5 text-white ${pct >= 85 ? 'bg-gradient-to-r from-green-500 to-emerald-600' : 'bg-black/70'}`}>
+                     {Math.round(pct)}%
                  </div>
             </div>
+            {/* Tooltip Nom */}
             <div className="absolute -top-8 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition bg-white text-black text-xs font-bold px-2 py-1 rounded-md whitespace-nowrap pointer-events-none z-50">
                 {match.pseudo}
             </div>

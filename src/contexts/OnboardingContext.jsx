@@ -11,45 +11,39 @@ export const OnboardingProvider = ({ children }) => {
   const navigate = useNavigate()
   const location = useLocation()
   
-  // --- ÉTATS ---
   const [loading, setLoading] = useState(true)
   const [loadingText, setLoadingText] = useState("Connexion...")
-  
-  // Modes
   const isEditMode = location.state?.mode === 'edit'
   const isQuizOnly = location.state?.mode === 'quiz_only'
 
-  // Quiz Data
   const [dbQuestions, setDbQuestions] = useState([])
   const [currentQuestion, setCurrentQuestion] = useState(null)
   const [answersText, setAnswersText] = useState([])
-  const [recordedAnswers, setRecordedAnswers] = useState([])
+  const [recordedAnswers, setRecordedAnswers] = useState([]) // Stocke score_value !
   const [questionHistory, setQuestionHistory] = useState([])
   const [isQuestionnaireDone, setIsQuestionnaireDone] = useState(false)
 
-  // Form Data
   const [formationsData, setFormationsData] = useState([])
   const [formData, setFormData] = useState({
     pseudo: '', sexe: '', birthDate: '',
     etude: '', theme: '', annee: '', nom: '', parcours: '', lieu: ''
   })
-
-  // Avatar Data
   const [avatarPublic, setAvatarPublic] = useState('avatar1.png')
   const [realPhotoFile, setRealPhotoFile] = useState(null)
   const [realPhotoPreview, setRealPhotoPreview] = useState(null)
 
-  // --- INITIALISATION ---
   useEffect(() => {
     const initData = async () => {
       setLoading(true)
       try {
         const { data: { user } } = await supabase.auth.getUser()
         
-        // 1. Charger les formations et questions
         const [formationsRes, questionsRes] = await Promise.all([
            supabase.from('formations').select('*'),
-           supabase.from('questions').select(`id, text, order, depends_on_option_id, options ( id, text )`).order('order', { ascending: true })
+           // ICI: On récupère score_value et dimension
+           supabase.from('questions')
+             .select(`id, text, order, depends_on_option_id, options ( id, text, dimension, score_value )`)
+             .order('order', { ascending: true })
         ])
 
         setFormationsData(formationsRes.data || [])
@@ -59,7 +53,6 @@ export const OnboardingProvider = ({ children }) => {
           setCurrentQuestion(questionsRes.data.find(q => q.depends_on_option_id === null))
         }
 
-        // 2. Pré-remplissage si mode Edit/QuizOnly
         if ((isEditMode || isQuizOnly) && user) {
           const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
           if (profile) {
@@ -83,17 +76,22 @@ export const OnboardingProvider = ({ children }) => {
     initData()
   }, [isEditMode, isQuizOnly])
 
-  // --- LOGIQUE QUIZ ---
   const handleQuizAnswer = (option) => {
     const newHistory = [...questionHistory, currentQuestion]
     const newAnswersText = [...answersText, option.text]
-    const newRecorded = [...recordedAnswers, { question_id: currentQuestion.id, option_id: option.id }]
+    
+    // ICI: On garde le score pour le calcul final
+    const newRecorded = [...recordedAnswers, { 
+      question_id: currentQuestion.id, 
+      option_id: option.id,
+      score_value: option.score_value || 0,
+      dimension: option.dimension || null 
+    }]
 
     setQuestionHistory(newHistory)
     setAnswersText(newAnswersText)
     setRecordedAnswers(newRecorded)
 
-    // Calcul prochaine question
     const child = dbQuestions.find(q => q.depends_on_option_id === option.id)
     if (child) {
       setCurrentQuestion(child)
@@ -104,7 +102,6 @@ export const OnboardingProvider = ({ children }) => {
 
       if (next) setCurrentQuestion(next)
       else {
-        // FIN DU QUIZ
         if (isQuizOnly) finalizeQuizOnly(newRecorded, newAnswersText)
         else setIsQuestionnaireDone(true)
       }
@@ -123,22 +120,31 @@ export const OnboardingProvider = ({ children }) => {
     setRecordedAnswers(r => r.slice(0, -1))
   }
 
-  // --- LOGIQUE FINALE ---
+  // Helper pour calculer le score
+  const calculateIsolationScore = (recs) => {
+    let score = 0
+    recs.forEach(r => { if(r.dimension === 'isolation') score += r.score_value })
+    return Math.min(Math.max(score, 0), 1)
+  }
+
   const finalizeQuizOnly = async (finalRecorded, finalTexts) => {
-      setLoading(true); setLoadingText("Mise à jour IA...")
+      setLoading(true); setLoadingText("Analyse de ta personnalité...")
       try {
           const { data: { user } } = await supabase.auth.getUser()
           
-          // Sauvegarde réponses
+          // 1. Sauvegarde des réponses (nettoyées)
+          const cleanAnswers = finalRecorded.map(({score_value, dimension, ...rest}) => ({ user_id: user.id, ...rest }))
           await supabase.from('user_answers').delete().eq('user_id', user.id)
-          await supabase.from('user_answers').insert(finalRecorded.map(a => ({ user_id: user.id, ...a })))
+          await supabase.from('user_answers').insert(cleanAnswers)
 
-          // IA Vector
-          const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-          const narrative = `Étudiant en ${profile.type_diplome} ${profile.domaine}. Personnalité : ${finalTexts.join(". ")}.`
+          // 2. IA ANTI-SILO (Focus Personnalité)
+          const narrative = `Personnalité et fonctionnement : ${finalTexts.join(". ")}. Centres d'intérêt : ${finalTexts.join(", ")}.`
           const vector = await generateProfileVector(narrative)
           
-          await supabase.from('profiles').update({ embedding: vector }).eq('id', user.id)
+          // 3. SCORE ISOLEMENT
+          const isoScore = calculateIsolationScore(finalRecorded)
+          
+          await supabase.from('profiles').update({ embedding: vector, isolation_score: isoScore }).eq('id', user.id)
           navigate('/profile')
       } catch (e) { console.error(e); setLoading(false) }
   }
@@ -148,7 +154,6 @@ export const OnboardingProvider = ({ children }) => {
       try {
           const { data: { user } } = await supabase.auth.getUser()
           
-          // Upload Photo
           let photoUrl = null
           if (realPhotoFile) {
               const fileName = `${user.id}-${Date.now()}.${realPhotoFile.name.split('.').pop()}`
@@ -157,28 +162,35 @@ export const OnboardingProvider = ({ children }) => {
               photoUrl = data.publicUrl
           }
 
-          // IA Vector
-          const narrative = `Étudiant en ${formData.etude} ${formData.theme}, ${formData.nom}. Campus : ${formData.lieu}. Genre : ${formData.sexe}. Personnalité : ${answersText.join(". ")}.`
+          // 2. IA ANTI-SILO : On enlève la formation du texte principal !
+          const narrative = `
+            Personnalité : ${answersText.join(". ")}.
+            Goûts : ${answersText.join(", ")}.
+            Genre : ${formData.sexe}.
+          `.trim()
+          
           const vector = await generateProfileVector(narrative)
+          const isoScore = calculateIsolationScore(recordedAnswers)
 
-          // Upsert Profile
           const updates = {
               id: user.id, email: user.email,
               pseudo: formData.pseudo, sexe: formData.sexe, date_naissance: formData.birthDate,
               type_diplome: formData.etude, domaine: formData.theme, 
               annee_etude: formData.etude.includes('Doctora') ? null : formData.annee,
               intitule: formData.nom, parcours: formData.parcours || null, etudes_lieu: formData.lieu,
-              embedding: vector, avatar_public: avatarPublic, avatar_prive: photoUrl,
-              tags: [] // Reset tags par défaut
+              embedding: vector, 
+              isolation_score: isoScore, // <-- Sauvegardé
+              avatar_public: avatarPublic, avatar_prive: photoUrl,
+              tags: [] 
           }
           
           const { error } = await supabase.from('profiles').upsert(updates)
           if (error) throw error
 
-          // Save Answers (si pas mode edit)
           if (!isEditMode) {
+              const cleanAnswers = recordedAnswers.map(({score_value, dimension, ...rest}) => ({ user_id: user.id, ...rest }))
               await supabase.from('user_answers').delete().eq('user_id', user.id)
-              await supabase.from('user_answers').insert(recordedAnswers.map(a => ({ user_id: user.id, ...a })))
+              await supabase.from('user_answers').insert(cleanAnswers)
           }
 
           navigate('/app')
@@ -190,11 +202,8 @@ export const OnboardingProvider = ({ children }) => {
   return (
     <OnboardingContext.Provider value={{
       loading, loadingText, isEditMode, isQuizOnly,
-      // Quiz
       currentQuestion, isQuestionnaireDone, setIsQuestionnaireDone, handleQuizAnswer, handleBackQuiz, questionHistory,
-      // Form
       formData, updateFormData, formationsData,
-      // Avatar
       avatarPublic, setAvatarPublic, realPhotoFile, setRealPhotoFile, realPhotoPreview, setRealPhotoPreview,
       submitFullProfile
     }}>

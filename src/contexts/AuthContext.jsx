@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query' // <-- Nouveau standard
 import { supabase } from '../lib/supabaseClient'
 
 const AuthContext = createContext({})
@@ -7,55 +8,38 @@ export const useAuth = () => useContext(AuthContext)
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
-  
-  // 1. OPTIMISATION : On tente de récupérer le profil en cache immédiatement
-  const [profile, setProfile] = useState(() => {
-    try {
-      const cached = localStorage.getItem('philotes_profile')
-      return cached ? JSON.parse(cached) : null
-    } catch {
-      return null
-    }
-  })
-  
-  const [loading, setLoading] = useState(true)
+  const [authLoading, setAuthLoading] = useState(true)
+  const queryClient = useQueryClient()
 
-  // --- NOUVELLE FONCTION POUR METTRE À JOUR LE PROFIL MANUELLEMENT ---
-  const updateProfile = (newProfileData) => {
-    // 1. Mise à jour de l'état React (l'interface change tout de suite)
-    setProfile(newProfileData)
-    // 2. Mise à jour du cache local (pour le prochain rechargement)
-    localStorage.setItem('philotes_profile', JSON.stringify(newProfileData))
-  }
-  // -------------------------------------------------------------------
-
-  // 2. Gestion de la Session (Auth pure)
+  // 1. Gestion de la Session (Auth pure)
+  // On garde useEffect ici car c'est un listener (abonnement) et non une simple requête
   useEffect(() => {
     let mounted = true
 
     const getSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession()
+        const { data: { session }, error } = await supabase.auth.getSession()
+        if (error) throw error // On capture l'erreur proprement
+        
         if (mounted) {
            setUser(session?.user ?? null)
-           if (!session?.user) setLoading(false) 
+           setAuthLoading(false)
         }
       } catch (error) {
         console.error("Erreur session:", error)
-        if (mounted) setLoading(false)
+        if (mounted) setAuthLoading(false)
       }
     }
 
     getSession()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (mounted) {
-        setUser(session?.user ?? null)
-        if (!session?.user) {
-            setProfile(null)
-            localStorage.removeItem('philotes_profile') // Nettoyage cache
-            setLoading(false)
-        }
+      setUser(session?.user ?? null)
+      setAuthLoading(false)
+      
+      // Si déconnexion, on vide le cache du profil immédiatement pour sécurité
+      if (!session?.user) {
+        queryClient.removeQueries(['profile'])
       }
     })
 
@@ -63,44 +47,43 @@ export const AuthProvider = ({ children }) => {
       mounted = false
       subscription.unsubscribe()
     }
-  }, [])
+  }, [queryClient])
 
-  // 3. Gestion du Profil
-  useEffect(() => {
-    let mounted = true
-    
-    const getProfile = async () => {
-      if (!user) return
+  // 2. Gestion du Profil avec TanStack Query (Le Correctif)
+  // Remplace l'ancien useEffect et la gestion manuelle du localStorage
+  const { data: profile, isLoading: profileLoading } = useQuery({
+    queryKey: ['profile', user?.id], // La requête dépend de l'ID user
+    queryFn: async ({ signal }) => {
+      if (!user?.id) return null
+      
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single()
+        .abortSignal(signal) // <--- CORRECTION MEMORY LEAK : Annule la requête si démonté
 
-      try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .single()
-
-        if (error && error.code !== 'PGRST116') {
-           console.error("Erreur chargement profil:", error)
-        }
-        
-        if (mounted && data) {
-            // On utilise notre nouvelle fonction interne pour tout synchroniser
-            updateProfile(data) 
-        }
-      } catch (err) {
-        console.error("Exception profil:", err)
-      } finally {
-        if (mounted) setLoading(false)
+      if (error && error.code !== 'PGRST116') {
+         throw error
       }
-    }
+      return data || null
+    },
+    enabled: !!user?.id, // Ne lance la requête que si on a un user
+    staleTime: 1000 * 60 * 5, // Le profil est considéré "frais" pendant 5 minutes
+  })
 
-    if (user) {
-      getProfile()
-    }
-  }, [user])
+  // 3. Helper pour mettre à jour le profil (Optimistic Update)
+  const updateProfile = (newProfileData) => {
+    // Au lieu d'écrire dans localStorage, on met à jour le cache React Query
+    // Cela mettra à jour l'UI partout instantanément
+    queryClient.setQueryData(['profile', user?.id], newProfileData)
+  }
+
+  // Calcul de l'état de chargement global
+  // On charge si l'auth charge OU si l'utilisateur est connecté mais que son profil charge encore
+  const loading = authLoading || (!!user && profileLoading)
 
   return (
-    // On expose 'updateProfile' ici pour pouvoir l'utiliser ailleurs
     <AuthContext.Provider value={{ user, profile, updateProfile, loading }}>
       {children}
     </AuthContext.Provider>

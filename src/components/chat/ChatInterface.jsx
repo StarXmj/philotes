@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useLayoutEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile, AlertCircle } from 'lucide-react' // <--- Ajout AlertCircle
+import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile, AlertCircle } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import EmojiPicker from 'emoji-picker-react'
 
@@ -8,6 +8,7 @@ const MESSAGE_LIFETIME_HOURS = 24
 const PAGE_SIZE = 20
 
 // --- SOUS-COMPOSANTS ---
+
 const TypingIndicator = () => (
   <div className="flex items-center gap-1 p-3 bg-white/10 rounded-2xl rounded-tl-none w-fit">
     <motion.div animate={{ y: [0, -5, 0] }} transition={{ duration: 0.6, repeat: Infinity, delay: 0 }} className="w-1.5 h-1.5 bg-gray-400 rounded-full" />
@@ -16,26 +17,28 @@ const TypingIndicator = () => (
   </div>
 )
 
-const MessageTimer = ({ createdAt }) => {
-  const [timeLeft, setTimeLeft] = useState("")
-  useEffect(() => {
-    const updateTimer = () => {
-      const created = new Date(createdAt).getTime()
-      const expire = created + MESSAGE_LIFETIME_HOURS * 60 * 60 * 1000
-      const now = new Date().getTime()
-      const diff = expire - now
-      if (diff <= 0) setTimeLeft("Expiré")
-      else {
-        const h = Math.floor(diff / (1000 * 60 * 60))
-        const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
-        setTimeLeft(`${h}h ${m}m`)
-      }
-    }
-    updateTimer()
-    const interval = setInterval(updateTimer, 60000)
-    return () => clearInterval(interval)
-  }, [createdAt])
-  return <div className="text-[9px] opacity-60 flex items-center justify-end gap-1 mt-1 font-mono"><Clock size={10} /> {timeLeft}</div>
+// OPTIMISATION: Ce composant est devenu "pur". Il ne gère plus son propre intervalle.
+// Il reçoit l'heure actuelle (currentTick) depuis le parent.
+const MessageTimer = ({ createdAt, currentTick }) => {
+  const created = new Date(createdAt).getTime()
+  const expire = created + MESSAGE_LIFETIME_HOURS * 60 * 60 * 1000
+  const diff = expire - currentTick
+  
+  let timeLeftLabel = ""
+
+  if (diff <= 0) {
+    timeLeftLabel = "Expiré"
+  } else {
+    const h = Math.floor(diff / (1000 * 60 * 60))
+    const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60))
+    timeLeftLabel = `${h}h ${m}m`
+  }
+
+  return (
+    <div className="text-[9px] opacity-60 flex items-center justify-end gap-1 mt-1 font-mono">
+      <Clock size={10} /> {timeLeftLabel}
+    </div>
+  )
 }
 
 // --- COMPOSANT PRINCIPAL ---
@@ -44,6 +47,19 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
   const [isRemoteTyping, setIsRemoteTyping] = useState(false)
+  
+  // --- GLOBAL TICK (OPTIMISATION PERF) ---
+  // Une seule horloge pour toute l'interface
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    // Mise à jour toutes les minutes pour recalculer le temps restant
+    const interval = setInterval(() => {
+      setNow(Date.now())
+    }, 60000) 
+    return () => clearInterval(interval)
+  }, [])
+  // ---------------------------------------
   
   // --- ÉTAT EMOJI ---
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
@@ -57,7 +73,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const [editText, setEditText] = useState('')
   
   // --- ÉTAT ERREUR (TOAST) ---
-  const [errorToast, setErrorToast] = useState(null) // { message: string }
+  const [errorToast, setErrorToast] = useState(null)
 
   const messagesEndRef = useRef(null)
   const containerRef = useRef(null)
@@ -71,7 +87,6 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
 
   const canChat = !connection || connection.status === 'accepted'
 
-  // Helper pour afficher les erreurs temporaires
   const showToast = (msg) => {
     setErrorToast(msg)
     setTimeout(() => setErrorToast(null), 4000)
@@ -170,31 +185,21 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
 
-  // 4. ACTIONS SÉCURISÉES (Try/Catch + Rollback)
-  
+  // 4. ACTIONS SÉCURISÉES
   const handleDelete = async (msgId) => {
     if (!window.confirm("Supprimer ce message ?")) return
-
-    // A. Sauvegarde de l'état (Snapshot)
     const msgToDelete = messages.find(m => m.id === msgId)
     if (!msgToDelete) return
 
-    // B. Optimistic Update (On supprime visuellement tout de suite)
     setMessages((current) => current.filter((msg) => msg.id !== msgId))
 
     try {
-      // C. Appel Réseau
       const { error } = await supabase.from('messages').delete().eq('id', msgId)
       if (error) throw error
-
     } catch (err) {
       console.error("Erreur suppression:", err)
-      
-      // D. Rollback en cas d'erreur
-      showToast("Impossible de supprimer le message. Restauration...")
-      
+      showToast("Impossible de supprimer le message.")
       setMessages(prev => {
-        // On réinjecte le message et on retrie par date (Croissant: plus vieux -> plus récent)
         const restored = [...prev, msgToDelete]
         return restored.sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
       })
@@ -213,35 +218,24 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
 
   const saveEdit = async () => {
     if (!editText.trim()) return handleDelete(editingId)
-    
     const targetId = editingId
     const newContent = editText
-    
-    // A. Sauvegarde du contenu original
     const originalMessage = messages.find(m => m.id === targetId)
     const oldContent = originalMessage?.content
 
-    // B. Optimistic Update
     setMessages((current) => current.map(m => m.id === targetId ? { ...m, content: newContent } : m))
     setEditingId(null)
     setEditText('')
 
     try {
-      // C. Appel Réseau
       const { error } = await supabase.from('messages').update({ content: newContent }).eq('id', targetId)
       if (error) throw error
-
     } catch (err) {
       console.error("Erreur édition:", err)
-
-      // D. Rollback
-      showToast("Échec de la modification. Annulation...")
-      
+      showToast("Échec de la modification.")
       if (oldContent) {
         setMessages((current) => current.map(m => m.id === targetId ? { ...m, content: oldContent } : m))
       }
-      // Optionnel : On peut rouvrir l'éditeur si on veut que l'user réessaie
-      // startEdit(originalMessage) 
     }
   }
 
@@ -279,15 +273,14 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
       scrollToBottom()
     } catch (error) { 
         console.error(error)
-        showToast("Erreur d'envoi. Vérifiez votre connexion.")
-        setInputText(text) // On remet le texte pour que l'user ne le perde pas
+        showToast("Erreur d'envoi.")
+        setInputText(text)
     }
   }
 
   return (
     <div className="flex flex-col h-full bg-slate-900 relative">
       
-      {/* TOAST D'ERREUR FLOTTANT */}
       <AnimatePresence>
         {errorToast && (
           <motion.div 
@@ -302,7 +295,6 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         )}
       </AnimatePresence>
 
-      {/* HEADER */}
       <div className="flex items-center gap-3 p-4 bg-slate-800 border-b border-white/10 shadow-md z-10">
         <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition text-gray-300">
           <ArrowLeft size={20} />
@@ -315,7 +307,6 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         </div>
       </div>
 
-      {/* MESSAGES */}
       <div 
         ref={containerRef}
         onScroll={handleScroll}
@@ -344,7 +335,8 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
                 ) : (
                   <div className={`p-3 rounded-2xl text-sm break-words relative ${isMe ? 'bg-philo-primary text-white rounded-tr-none' : 'bg-white/10 text-gray-200 rounded-tl-none'}`}>
                     {msg.content}
-                    <MessageTimer createdAt={msg.created_at} />
+                    {/* On passe le Global Tick ici */}
+                    <MessageTimer createdAt={msg.created_at} currentTick={now} />
                   </div>
                 )}
                 {isMe && !isEditing && (
@@ -361,10 +353,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         <div ref={messagesEndRef} />
       </div>
 
-      {/* INPUT ZONE */}
       <div className="p-3 bg-slate-800 border-t border-white/10 flex gap-2 items-end relative">
-        
-        {/* PICKER FLOTTANT */}
         {showEmojiPicker && (
           <div className="absolute bottom-16 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/10">
             <EmojiPicker 
