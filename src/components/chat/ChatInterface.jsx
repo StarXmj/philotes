@@ -1,14 +1,13 @@
 import { useEffect, useState, useRef, useLayoutEffect } from 'react'
-import { motion } from 'framer-motion'
-import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile } from 'lucide-react' // <--- Ajout de Smile
+import { motion, AnimatePresence } from 'framer-motion'
+import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile, AlertCircle } from 'lucide-react' // <--- Ajout AlertCircle
 import { supabase } from '../../lib/supabaseClient'
-import EmojiPicker from 'emoji-picker-react' // <--- Import de la lib
+import EmojiPicker from 'emoji-picker-react'
 
 const MESSAGE_LIFETIME_HOURS = 24
 const PAGE_SIZE = 20
 
-// --- SOUS-COMPOSANTS (TypingIndicator, MessageTimer) ---
-// (Je les garde identiques pour ne pas alourdir la lecture, ils ne changent pas)
+// --- SOUS-COMPOSANTS ---
 const TypingIndicator = () => (
   <div className="flex items-center gap-1 p-3 bg-white/10 rounded-2xl rounded-tl-none w-fit">
     <motion.div animate={{ y: [0, -5, 0] }} transition={{ duration: 0.6, repeat: Infinity, delay: 0 }} className="w-1.5 h-1.5 bg-gray-400 rounded-full" />
@@ -57,6 +56,9 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const [editingId, setEditingId] = useState(null)
   const [editText, setEditText] = useState('')
   
+  // --- ÉTAT ERREUR (TOAST) ---
+  const [errorToast, setErrorToast] = useState(null) // { message: string }
+
   const messagesEndRef = useRef(null)
   const containerRef = useRef(null)
   const channelRef = useRef(null)
@@ -68,6 +70,12 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   if (connection?.status === 'accepted') statusLabel = "Lien actif ✨"
 
   const canChat = !connection || connection.status === 'accepted'
+
+  // Helper pour afficher les erreurs temporaires
+  const showToast = (msg) => {
+    setErrorToast(msg)
+    setTimeout(() => setErrorToast(null), 4000)
+  }
 
   // 1. CHARGEMENT DES MESSAGES (PAGINÉ)
   const fetchMessages = async (offset = 0) => {
@@ -93,6 +101,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
       }
     } catch (err) {
       console.error("Erreur chargement messages:", err)
+      showToast("Erreur de chargement des messages")
     } finally {
       setIsLoadingMore(false)
     }
@@ -161,11 +170,34 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
 
-  // 4. ACTIONS
+  // 4. ACTIONS SÉCURISÉES (Try/Catch + Rollback)
+  
   const handleDelete = async (msgId) => {
-    if (window.confirm("Supprimer ce message ?")) {
-      setMessages((current) => current.filter((msg) => msg.id !== msgId))
-      await supabase.from('messages').delete().eq('id', msgId)
+    if (!window.confirm("Supprimer ce message ?")) return
+
+    // A. Sauvegarde de l'état (Snapshot)
+    const msgToDelete = messages.find(m => m.id === msgId)
+    if (!msgToDelete) return
+
+    // B. Optimistic Update (On supprime visuellement tout de suite)
+    setMessages((current) => current.filter((msg) => msg.id !== msgId))
+
+    try {
+      // C. Appel Réseau
+      const { error } = await supabase.from('messages').delete().eq('id', msgId)
+      if (error) throw error
+
+    } catch (err) {
+      console.error("Erreur suppression:", err)
+      
+      // D. Rollback en cas d'erreur
+      showToast("Impossible de supprimer le message. Restauration...")
+      
+      setMessages(prev => {
+        // On réinjecte le message et on retrie par date (Croissant: plus vieux -> plus récent)
+        const restored = [...prev, msgToDelete]
+        return restored.sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+      })
     }
   }
 
@@ -181,12 +213,36 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
 
   const saveEdit = async () => {
     if (!editText.trim()) return handleDelete(editingId)
+    
     const targetId = editingId
     const newContent = editText
+    
+    // A. Sauvegarde du contenu original
+    const originalMessage = messages.find(m => m.id === targetId)
+    const oldContent = originalMessage?.content
+
+    // B. Optimistic Update
     setMessages((current) => current.map(m => m.id === targetId ? { ...m, content: newContent } : m))
     setEditingId(null)
     setEditText('')
-    await supabase.from('messages').update({ content: newContent }).eq('id', targetId)
+
+    try {
+      // C. Appel Réseau
+      const { error } = await supabase.from('messages').update({ content: newContent }).eq('id', targetId)
+      if (error) throw error
+
+    } catch (err) {
+      console.error("Erreur édition:", err)
+
+      // D. Rollback
+      showToast("Échec de la modification. Annulation...")
+      
+      if (oldContent) {
+        setMessages((current) => current.map(m => m.id === targetId ? { ...m, content: oldContent } : m))
+      }
+      // Optionnel : On peut rouvrir l'éditeur si on veut que l'user réessaie
+      // startEdit(originalMessage) 
+    }
   }
 
   const handleTyping = (e) => {
@@ -196,10 +252,9 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     }
   }
 
-  // --- GESTION EMOJI ---
   const onEmojiClick = (emojiObject) => {
     setInputText(prev => prev + emojiObject.emoji)
-    setShowEmojiPicker(false) // On ferme après sélection ? Ou on laisse ouvert (à toi de voir, ici je ferme)
+    setShowEmojiPicker(false)
   }
 
   const sendMessage = async (e) => {
@@ -207,25 +262,46 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     if (!inputText.trim()) return
     const text = inputText
     setInputText('')
-    setShowEmojiPicker(false) // On ferme le picker à l'envoi
+    setShowEmojiPicker(false)
     
     try {
       let currentConn = connection
       if (!currentConn) {
         currentConn = await onCreateConnection(text)
       } else {
-        await supabase.from('messages').insert({
+        const { error } = await supabase.from('messages').insert({
           connection_id: currentConn.id,
           sender_id: currentUser.id,
           content: text
         })
+        if (error) throw error
       }
       scrollToBottom()
-    } catch (error) { console.error(error) }
+    } catch (error) { 
+        console.error(error)
+        showToast("Erreur d'envoi. Vérifiez votre connexion.")
+        setInputText(text) // On remet le texte pour que l'user ne le perde pas
+    }
   }
 
   return (
-    <div className="flex flex-col h-full bg-slate-900">
+    <div className="flex flex-col h-full bg-slate-900 relative">
+      
+      {/* TOAST D'ERREUR FLOTTANT */}
+      <AnimatePresence>
+        {errorToast && (
+          <motion.div 
+            initial={{ opacity: 0, y: 50 }} 
+            animate={{ opacity: 1, y: 0 }} 
+            exit={{ opacity: 0, y: 50 }}
+            className="absolute bottom-20 left-1/2 transform -translate-x-1/2 z-50 bg-red-500/90 text-white px-4 py-2 rounded-full shadow-lg flex items-center gap-2 text-sm backdrop-blur-sm"
+          >
+            <AlertCircle size={16} />
+            <span>{errorToast}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* HEADER */}
       <div className="flex items-center gap-3 p-4 bg-slate-800 border-b border-white/10 shadow-md z-10">
         <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition text-gray-300">

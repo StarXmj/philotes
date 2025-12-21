@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mail, Lock, CheckCircle, ShieldCheck, Loader2, ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { preloadModel } from '../lib/ai' // <-- IMPORT DU PRELOADER
 
 export default function Landing() {
   const navigate = useNavigate()
@@ -13,6 +14,13 @@ export default function Landing() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [msg, setMsg] = useState(null)
+
+  // --- WARM-UP IA ---
+  // Lance le téléchargement du modèle (~30MB) discrètement dès l'arrivée sur la page
+  useEffect(() => {
+    preloadModel()
+  }, [])
+  // ------------------
 
   const getPasswordStrength = (pass) => {
     let score = 0
@@ -53,7 +61,6 @@ export default function Landing() {
         }
 
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
-          // C'EST ICI LA MODIFICATION IMPORTANTE :
           redirectTo: window.location.origin + '/update-password', 
         })
 
