@@ -19,10 +19,10 @@ export default function Dashboard() {
   const [matches, setMatches] = useState([])
   const [loadingMatches, setLoadingMatches] = useState(true)
   
-  // --- ÉTATS DE SÉLECTION ---
+  // --- ÉTATS UI ---
   const [selectedUser, setSelectedUser] = useState(null)
   const [isSidebarVisible, setIsSidebarVisible] = useState(false)
-  const [is3D, setIs3D] = useState(true)
+  const [is3D, setIs3D] = useState(false) // Par défaut en 2D pour voir les notifs direct
 
   // --- FILTRES ---
   const [showFriends, setShowFriends] = useState(true)
@@ -30,70 +30,27 @@ export default function Dashboard() {
   const [isOppositeMode, setIsOppositeMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
-  // --- UI RESPONSIVE ---
+  // --- RESPONSIVE ---
   const [showMobileFilters, setShowMobileFilters] = useState(false)
   const [showMobileList, setShowMobileList] = useState(false)
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
-  // --- NOUVEAU : GESTION DES NOTIFICATIONS ---
-  // Stocke le nombre de messages non lus : { "uuid_user": 3 }
+  // --- NOTIFICATIONS (MESSAGES) ---
   const [unreadCounts, setUnreadCounts] = useState({}) 
 
-  useEffect(() => {
-    if (!user) return
-    const fetchUnread = async () => {
-        // TODO: Connecter à votre table 'messages' via Supabase ici
-        // Pour l'instant on laisse vide pour éviter les erreurs si la table n'existe pas
-    }
-    fetchUnread()
-  }, [user])
-
-  // --- LOGIQUE DE SÉLECTION & NOTIFICATIONS ---
-  const handleUserSelect = (targetUser) => {
-    // 1. Fermer la liste mobile
-    setShowMobileList(false)
-    
-    // 2. Définir la cible
-    setSelectedUser(targetUser)
-
-    // 3. Marquer comme "vu" localement (supprime le badge)
-    if (unreadCounts[targetUser.id]) {
-        setUnreadCounts(prev => {
-            const newCounts = { ...prev }
-            delete newCounts[targetUser.id]
-            return newCounts
-        })
-    }
-
-    // 4. Gestion du délai caméra (Mobile vs PC)
-    if (window.innerWidth < 768) {
-        setIsSidebarVisible(false)
-        setTimeout(() => setIsSidebarVisible(true), 1500)
-    } else {
-        setIsSidebarVisible(true)
-    }
-  }
-
-  const handleCloseProfile = () => {
-      setIsSidebarVisible(false)
-      setTimeout(() => setSelectedUser(null), 300)
-  }
-
-  const handleLogout = async () => await supabase.auth.signOut() 
-
-  // --- CHARGEMENT DES DONNÉES (MATCHS) ---
+  // 1. CHARGEMENT DES DONNÉES ET SUBSCRIPTIONS
+  // 1. CHARGEMENT DES DONNÉES ET SUBSCRIPTIONS
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
 
-    if (!myProfile.embedding) {
-        setLoadingMatches(false)
-        return
-    }
-
-    const loadMatches = async () => {
+    // A. Charger les matchs et connexions
+    const loadData = async () => {
       try {
+          if (!myProfile.embedding) { setLoadingMatches(false); return }
+
+          // 1. Matchs RPC
           const { data: matchedUsers, error: rpcError } = await supabase.rpc('find_best_matches', {
             p_embedding: myProfile.embedding,
             p_match_threshold: 0, 
@@ -101,15 +58,16 @@ export default function Dashboard() {
             p_my_id: user.id,
             p_my_domaine: myProfile.domaine || '' 
           })
-
           if (rpcError) throw rpcError
 
-          if (matchedUsers) {
-            const { data: allMyConnections } = await supabase
-              .from('connections')
-              .select('*')
-              .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
+          // 2. Connexions existantes
+          const { data: allMyConnections } = await supabase
+            .from('connections')
+            .select('*')
+            .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
 
+          // 3. Fusionner les données
+          if (matchedUsers) {
             const matchesWithStatus = matchedUsers
               .filter(p => p.id !== user.id)
               .map(match => {
@@ -126,30 +84,114 @@ export default function Dashboard() {
               })
             setMatches(matchesWithStatus)
           }
+
+          // 4. Charger les messages non lus (COUNT réel)
+          // GRÂCE À LA MIGRATION SQL, ON PEUT MAINTENANT FILTRER PAR receiver_id ET read_at
+          const { data: unreadData, error: msgError } = await supabase
+             .from('messages')
+             .select('sender_id')
+             .eq('receiver_id', user.id) // Ça marche maintenant !
+             .is('read_at', null)        // Ça aussi !
+          
+          if (!msgError && unreadData) {
+              const counts = {}
+              unreadData.forEach(m => {
+                  counts[m.sender_id] = (counts[m.sender_id] || 0) + 1
+              })
+              setUnreadCounts(counts)
+          }
+
       } catch (error) { 
           console.error("Erreur chargement:", error) 
       } finally { 
           setLoadingMatches(false) 
       }
     }
-    loadMatches()
-  }, [user, myProfile, authLoading])
+    loadData()
 
-  // --- REALTIME ---
-  useEffect(() => {
-    if (!user) return
-    const channel = supabase.channel('dashboard-room')
-    const handleConnectionChange = (payload) => {
+    // B. SETUP REALTIME
+    const channel = supabase.channel('dashboard-global')
+
+    // Écoute 1 : Changements de CONNEXION (Demande d'ami -> Aura Verte)
+    channel.on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'connections', 
+        filter: `receiver_id=eq.${user.id}` 
+    }, (payload) => {
         setMatches(curr => curr.map(m => {
-            const isRelevant = (payload.new && (payload.new.sender_id === m.id || payload.new.receiver_id === m.id)) ||
-                               (payload.old && (payload.old.sender_id === m.id || payload.old.receiver_id === m.id))
-            if (isRelevant) return { ...m, connection: payload.eventType === 'DELETE' ? null : payload.new }
+            if (m.id === payload.new.sender_id) {
+                return { ...m, connection: payload.new }
+            }
             return m
         }))
-    }
-    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'connections', filter: `sender_id=eq.${user.id}` }, handleConnectionChange).subscribe()
+    })
+    // Mise à jour si c'est moi qui envoie/accepte
+    .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'connections', 
+        filter: `sender_id=eq.${user.id}`
+    }, (payload) => {
+        setMatches(curr => curr.map(m => {
+            if (m.id === payload.new.receiver_id) {
+                 return { ...m, connection: payload.new }
+            }
+            return m
+        }))
+    })
+
+    // Écoute 2 : Nouveaux MESSAGES (Message reçu -> Aura Blanche)
+    // C'EST ICI QUE LA MAGIE OPÈRE AVEC LA NOUVELLE COLONNE receiver_id
+    .on('postgres_changes', { 
+        event: 'INSERT', 
+        schema: 'public', 
+        table: 'messages', 
+        filter: `receiver_id=eq.${user.id}` // Filtre Realtime efficace
+    }, (payload) => {
+        // Incrémente le compteur pour l'expéditeur
+        const senderId = payload.new.sender_id
+        setUnreadCounts(prev => ({
+            ...prev,
+            [senderId]: (prev[senderId] || 0) + 1
+        }))
+    })
+
+    channel.subscribe()
+
     return () => { supabase.removeChannel(channel) }
-  }, [user])
+
+  }, [user, myProfile, authLoading])
+
+  // --- LOGIQUE D'INTERACTION ---
+  const handleUserSelect = (targetUser) => {
+    setShowMobileList(false)
+    setSelectedUser(targetUser)
+
+    // Quand on ouvre un profil, on considère ses messages comme lus VISUELLEMENT
+    // (La mise à jour DB 'read_at' se fera dans le composant Chat)
+    if (unreadCounts[targetUser.id]) {
+        setUnreadCounts(prev => {
+            const newCounts = { ...prev }
+            delete newCounts[targetUser.id]
+            return newCounts
+        })
+    }
+
+    if (window.innerWidth < 768) {
+        setIsSidebarVisible(false)
+        setTimeout(() => setIsSidebarVisible(true), 1500)
+    } else {
+        setIsSidebarVisible(true)
+    }
+  }
+
+  const handleCloseProfile = () => {
+      setIsSidebarVisible(false)
+      setTimeout(() => setSelectedUser(null), 300)
+  }
+
+  const handleLogout = async () => await supabase.auth.signOut() 
 
   // --- FILTRAGE ---
   const processedMatches = useMemo(() => {
