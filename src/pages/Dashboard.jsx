@@ -19,58 +19,70 @@ export default function Dashboard() {
   const [matches, setMatches] = useState([])
   const [loadingMatches, setLoadingMatches] = useState(true)
   
-  // --- ÉTAT DE SÉLECTION DÉCOUPLÉ ---
-  // selectedUser = La cible de la caméra 3D (Focus)
-  // isSidebarVisible = L'état d'ouverture du panneau latéral (UI)
+  // --- ÉTATS DE SÉLECTION ---
   const [selectedUser, setSelectedUser] = useState(null)
   const [isSidebarVisible, setIsSidebarVisible] = useState(false)
-  
   const [is3D, setIs3D] = useState(true)
 
-  // Filtres
+  // --- FILTRES ---
   const [showFriends, setShowFriends] = useState(true)
   const [matchRange, setMatchRange] = useState([0, 100])
   const [isOppositeMode, setIsOppositeMode] = useState(false)
-  const [unreadCounts, setUnreadCounts] = useState({})
   const [searchQuery, setSearchQuery] = useState('')
 
-  // États UI
+  // --- UI RESPONSIVE ---
   const [showMobileFilters, setShowMobileFilters] = useState(false)
   const [showMobileList, setShowMobileList] = useState(false)
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
-  // --- LOGIQUE INTELLIGENTE MOBILE VS PC ---
-  const handleUserSelect = (user) => {
-    // 1. On ferme la liste mobile pour dégager la vue
+  // --- NOUVEAU : GESTION DES NOTIFICATIONS ---
+  // Stocke le nombre de messages non lus : { "uuid_user": 3 }
+  const [unreadCounts, setUnreadCounts] = useState({}) 
+
+  useEffect(() => {
+    if (!user) return
+    const fetchUnread = async () => {
+        // TODO: Connecter à votre table 'messages' via Supabase ici
+        // Pour l'instant on laisse vide pour éviter les erreurs si la table n'existe pas
+    }
+    fetchUnread()
+  }, [user])
+
+  // --- LOGIQUE DE SÉLECTION & NOTIFICATIONS ---
+  const handleUserSelect = (targetUser) => {
+    // 1. Fermer la liste mobile
     setShowMobileList(false)
     
-    // 2. On définit la cible (La caméra commence à zoomer immédiatement)
-    setSelectedUser(user)
+    // 2. Définir la cible
+    setSelectedUser(targetUser)
 
-    // 3. Gestion du délai selon l'appareil
+    // 3. Marquer comme "vu" localement (supprime le badge)
+    if (unreadCounts[targetUser.id]) {
+        setUnreadCounts(prev => {
+            const newCounts = { ...prev }
+            delete newCounts[targetUser.id]
+            return newCounts
+        })
+    }
+
+    // 4. Gestion du délai caméra (Mobile vs PC)
     if (window.innerWidth < 768) {
-        // MOBILE : On cache d'abord le sidebar pour voir l'animation
         setIsSidebarVisible(false)
-        
-        // On attend 1.5s (le temps que la caméra arrive) avant d'afficher le profil
-        setTimeout(() => {
-            setIsSidebarVisible(true)
-        }, 1500)
+        setTimeout(() => setIsSidebarVisible(true), 1500)
     } else {
-        // PC : On affiche tout de suite (comme avant)
         setIsSidebarVisible(true)
     }
   }
 
-  // Fonction de fermeture propre
   const handleCloseProfile = () => {
       setIsSidebarVisible(false)
-      // Petit délai pour laisser le panneau disparaitre avant de dé-zoomer
       setTimeout(() => setSelectedUser(null), 300)
   }
 
-  // 1. DATA LOADING
+  const handleLogout = async () => await supabase.auth.signOut() 
+
+  // --- CHARGEMENT DES DONNÉES (MATCHS) ---
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
@@ -123,7 +135,7 @@ export default function Dashboard() {
     loadMatches()
   }, [user, myProfile, authLoading])
 
-  // 2. REALTIME
+  // --- REALTIME ---
   useEffect(() => {
     if (!user) return
     const channel = supabase.channel('dashboard-room')
@@ -139,7 +151,7 @@ export default function Dashboard() {
     return () => { supabase.removeChannel(channel) }
   }, [user])
 
-  // 3. FILTRAGE
+  // --- FILTRAGE ---
   const processedMatches = useMemo(() => {
     let filtered = matches
     if (!showFriends) filtered = filtered.filter(m => m.connection?.status !== 'accepted')
@@ -156,8 +168,6 @@ export default function Dashboard() {
     filtered.sort((a, b) => isOppositeMode ? a.score - b.score : b.score - a.score)
     return filtered
   }, [matches, showFriends, matchRange, isOppositeMode, searchQuery])
-
-  const handleLogout = async () => await supabase.auth.signOut() 
 
   if (authLoading || loadingMatches) return <div className="min-h-screen bg-philo-dark flex flex-col gap-4 items-center justify-center text-white p-4"><p className="animate-pulse text-xl font-bold">Chargement de la galaxie...</p></div>
 
@@ -179,7 +189,6 @@ export default function Dashboard() {
 
   return (
     <div className="h-screen bg-philo-dark text-white p-4 relative overflow-hidden flex flex-col">
-      
       {/* NAVBAR */}
       <div className="flex justify-between items-center z-30 w-full max-w-full mx-auto py-2 px-4 md:px-10 shrink-0 relative">
         <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
@@ -236,14 +245,20 @@ export default function Dashboard() {
                 <Constellation3D 
                     matches={processedMatches} 
                     myProfile={myProfile} 
-                    onSelectUser={handleUserSelect} // On utilise le handler intelligent
-                    selectedUser={selectedUser} 
+                    onSelectUser={handleUserSelect} 
+                    selectedUser={selectedUser}
+                    // PROPS POUR NOTIFICATIONS (ignorées par la 3D pour l'instant)
+                    unreadCounts={unreadCounts}
+                    myId={user?.id}
                 />
              ) : (
                 <ConstellationView 
                     matches={processedMatches} 
                     myProfile={myProfile} 
                     onSelectUser={handleUserSelect} 
+                    // PROPS POUR NOTIFICATIONS (utilisées par la 2D)
+                    unreadCounts={unreadCounts}
+                    myId={user?.id}
                 />
              )}
           </div>
@@ -273,7 +288,7 @@ export default function Dashboard() {
           )}
       </AnimatePresence>
 
-      {/* SIDEBAR PROFIL : NE S'OUVRE QUE SI 'isSidebarVisible' EST TRUE */}
+      {/* SIDEBAR PROFIL */}
       <AnimatePresence>
           {(selectedUser && isSidebarVisible) && (
               <>
