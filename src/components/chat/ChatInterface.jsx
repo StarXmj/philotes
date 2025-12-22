@@ -17,8 +17,6 @@ const TypingIndicator = () => (
   </div>
 )
 
-// OPTIMISATION: Ce composant est devenu "pur". Il ne gère plus son propre intervalle.
-// Il reçoit l'heure actuelle (currentTick) depuis le parent.
 const MessageTimer = ({ createdAt, currentTick }) => {
   const created = new Date(createdAt).getTime()
   const expire = created + MESSAGE_LIFETIME_HOURS * 60 * 60 * 1000
@@ -48,31 +46,21 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const [inputText, setInputText] = useState('')
   const [isRemoteTyping, setIsRemoteTyping] = useState(false)
   
-  // --- GLOBAL TICK (OPTIMISATION PERF) ---
-  // Une seule horloge pour toute l'interface
+  // --- GLOBAL TICK ---
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
-    // Mise à jour toutes les minutes pour recalculer le temps restant
     const interval = setInterval(() => {
       setNow(Date.now())
     }, 60000) 
     return () => clearInterval(interval)
   }, [])
-  // ---------------------------------------
   
-  // --- ÉTAT EMOJI ---
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
-
-  // --- ÉTATS PAGINATION ---
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(true)
-  
-  // --- ÉTATS POUR L'ÉDITION ---
   const [editingId, setEditingId] = useState(null)
   const [editText, setEditText] = useState('')
-  
-  // --- ÉTAT ERREUR (TOAST) ---
   const [errorToast, setErrorToast] = useState(null)
 
   const messagesEndRef = useRef(null)
@@ -92,7 +80,22 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     setTimeout(() => setErrorToast(null), 4000)
   }
 
-  // 1. CHARGEMENT DES MESSAGES (PAGINÉ)
+  // --- NOUVELLE FONCTION : MARQUER COMME LU EN DB ---
+  const markAsRead = async () => {
+    if (!connection?.id || !currentUser?.id) return
+
+    // On update SEULEMENT les messages qui me sont destinés et qui sont non lus
+    const { error } = await supabase
+      .from('messages')
+      .update({ read_at: new Date().toISOString() })
+      .eq('connection_id', connection.id)
+      .eq('receiver_id', currentUser.id)
+      .is('read_at', null)
+
+    if (error) console.error("Erreur markAsRead:", error)
+  }
+
+  // 1. CHARGEMENT DES MESSAGES
   const fetchMessages = async (offset = 0) => {
     if (!connection?.id) return
     try {
@@ -111,6 +114,8 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
       if (offset === 0) {
         setMessages(newMessages)
         setTimeout(() => scrollToBottom(), 100)
+        // APPEL ICI : Quand j'ouvre le chat, je marque tout comme lu
+        markAsRead()
       } else {
         setMessages(prev => [...newMessages, ...prev])
       }
@@ -122,7 +127,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     }
   }
 
-  // 2. INITIALISATION
+  // 2. INITIALISATION & REALTIME
   useEffect(() => {
     setMessages([])
     setHasMore(true)
@@ -139,6 +144,11 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
           })
           setIsRemoteTyping(false)
           setTimeout(() => scrollToBottom(), 100)
+
+          // APPEL ICI : Si je reçois un message alors que le chat est ouvert
+          if (payload.new.receiver_id === currentUser.id) {
+              markAsRead()
+          }
         }
       )
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
@@ -185,7 +195,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
 
-  // 4. ACTIONS SÉCURISÉES
+  // 4. ACTIONS
   const handleDelete = async (msgId) => {
     if (!window.confirm("Supprimer ce message ?")) return
     const msgToDelete = messages.find(m => m.id === msgId)
@@ -335,7 +345,6 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
                 ) : (
                   <div className={`p-3 rounded-2xl text-sm break-words relative ${isMe ? 'bg-philo-primary text-white rounded-tr-none' : 'bg-white/10 text-gray-200 rounded-tl-none'}`}>
                     {msg.content}
-                    {/* On passe le Global Tick ici */}
                     <MessageTimer createdAt={msg.created_at} currentTick={now} />
                   </div>
                 )}

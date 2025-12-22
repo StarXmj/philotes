@@ -37,6 +37,7 @@ const Planet = ({ angle, radius, duration, reverse = false, children }) => {
 }
 
 // --- NODE INTELLIGENT AVEC NOTIFICATIONS ---
+// J'ai retiré la fonction de comparaison personnalisée à la fin pour garantir la mise à jour
 const MatchNode = memo(({ match, onClick, unreadCount, myId }) => {
     const isFriend = match.connection?.status === 'accepted'
     
@@ -60,9 +61,9 @@ const MatchNode = memo(({ match, onClick, unreadCount, myId }) => {
         animationClass = "animate-pulse" 
     } 
     else if (hasUnreadMessages) {
-        // CAS 2 : MESSAGE NON LU -> AURA BLANCHE PULSE
+        // CAS 2 : MESSAGE NON LU -> AURA BLANCHE/ROUGE PULSE
         borderColor = "border-white"
-        shadowClass = "shadow-[0_0_20px_rgba(255,255,255,0.9)]" 
+        shadowClass = "shadow-[0_0_20px_rgba(255,255,255,0.6)]" 
         animationClass = "animate-pulse"
     }
     else if (isFriend) { 
@@ -84,7 +85,7 @@ const MatchNode = memo(({ match, onClick, unreadCount, myId }) => {
     return (
         <div onClick={(e) => { e.stopPropagation(); onClick(match); }} className="relative group cursor-pointer transition-transform duration-300 hover:scale-125 z-10">
             
-            {/* CERCLE PRINCIPAL AVEC AURA CONDITIONNELLE */}
+            {/* CERCLE PRINCIPAL */}
             <div className={`w-8 h-8 md:w-12 md:h-12 rounded-full bg-slate-900 border ${borderColor} ${shadowClass} ${animationClass} overflow-hidden relative transition-all duration-300`}>
                 {isFriend && match.avatar_prive ? <img src={match.avatar_prive} className="w-full h-full object-cover" loading="lazy" draggable={false}/> : 
                  match.avatar_public ? <img src={`/avatars/${match.avatar_public}`} className="w-full h-full object-cover" loading="lazy" draggable={false}/> : 
@@ -93,14 +94,14 @@ const MatchNode = memo(({ match, onClick, unreadCount, myId }) => {
 
             {/* BADGE "NEW" (DEMANDE DE LIEN) */}
             {isPendingRequest && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-green-500 text-black text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-lg z-20 animate-bounce">
+                <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-green-500 text-black text-[9px] font-black px-2 py-0.5 rounded-full shadow-xl z-50 animate-bounce border border-white/20">
                     NEW
                 </div>
             )}
 
             {/* BADGE COMPTEUR (MESSAGES) */}
             {hasUnreadMessages && !isPendingRequest && (
-                <div className="absolute -top-2 -right-2 bg-white text-black text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-lg z-20 border-2 border-slate-900">
+                <div className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-xl z-50 border-2 border-slate-900 animate-pulse">
                     {unreadCount}
                 </div>
             )}
@@ -113,12 +114,7 @@ const MatchNode = memo(({ match, onClick, unreadCount, myId }) => {
             )}
         </div>
     )
-}, (prev, next) => 
-    prev.match.id === next.match.id && 
-    prev.match.score === next.match.score && 
-    prev.match.connection?.status === next.match.connection?.status &&
-    prev.unreadCount === next.unreadCount
-)
+})
 
 // --- MAIN VIEW COMPONENT ---
 const ConstellationView = ({ matches, myProfile, onSelectUser, unreadCounts = {}, myId }) => {
@@ -195,7 +191,6 @@ const ConstellationView = ({ matches, myProfile, onSelectUser, unreadCounts = {}
                     </div>
                 </div>
 
-                {/* PROPS MISES À JOUR : PASSAGE DE 'unreadCounts' et 'myId' */}
                 {orbits.orbit1.length > 0 && <OrbitalRing radius={200} duration={60}>{orbits.orbit1.map((m, i) => <Planet key={m.id} radius={200} angle={(i/orbits.orbit1.length)*2*Math.PI} duration={60}><MatchNode match={m} onClick={onSelectUser} unreadCount={unreadCounts[m.id] || 0} myId={myId} /></Planet>)}</OrbitalRing>}
                 {orbits.orbit2.length > 0 && <OrbitalRing radius={350} duration={90} reverse>{orbits.orbit2.map((m, i) => <Planet key={m.id} radius={350} angle={(i/orbits.orbit2.length)*2*Math.PI} duration={90} reverse><MatchNode match={m} onClick={onSelectUser} unreadCount={unreadCounts[m.id] || 0} myId={myId} /></Planet>)}</OrbitalRing>}
                 {orbits.orbit3.length > 0 && <OrbitalRing radius={500} duration={120}>{orbits.orbit3.map((m, i) => <Planet key={m.id} radius={500} angle={(i/orbits.orbit3.length)*2*Math.PI} duration={120}><MatchNode match={m} onClick={onSelectUser} unreadCount={unreadCounts[m.id] || 0} myId={myId} /></Planet>)}</OrbitalRing>}
