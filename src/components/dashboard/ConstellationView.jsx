@@ -99,12 +99,12 @@ const MatchNode = memo(({ match, onClick, unreadCount, myId }) => {
                 </div>
             )}
 
-            {/* BADGE COMPTEUR (MESSAGES) */}
-            {hasUnreadMessages && !isPendingRequest && (
-                <div className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-xl z-50 border-2 border-slate-900 animate-pulse">
-                    {unreadCount}
-                </div>
-            )}
+            {/* BADGE COMPTEUR (MESSAGES) - CORRIGÉ : On l'affiche même si c'est une demande d'ami */}
+{hasUnreadMessages && (
+    <div className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-xl z-50 border-2 border-slate-900 animate-pulse">
+        {unreadCount}
+    </div>
+)}
 
             {/* SCORE (caché si notif importante pour ne pas surcharger) */}
             {!isPendingRequest && !hasUnreadMessages && pct > 40 && (

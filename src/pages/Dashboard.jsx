@@ -24,9 +24,7 @@ export default function Dashboard() {
   const [isSidebarVisible, setIsSidebarVisible] = useState(false)
   const [is3D, setIs3D] = useState(false) 
 
-  // --- SUIVI CHAT ACTIF (REF POUR REALTIME) ---
-  // On utilise une Ref pour que le listener Realtime accède à la valeur actuelle
-  // sans avoir besoin de se désabonner/réabonner à chaque changement.
+  // --- SUIVI CHAT ACTIF ---
   const activeChatUserIdRef = useRef(null) 
 
   // --- FILTRES ---
@@ -41,10 +39,32 @@ export default function Dashboard() {
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
-  // --- NOTIFICATIONS (MESSAGES) ---
+  // --- NOTIFICATIONS ---
   const [unreadCounts, setUnreadCounts] = useState({}) 
 
-  // 1. CHARGEMENT DES DONNÉES
+  // --- 1. FONCTION DE CHARGEMENT DES NOTIFICATIONS (Optimisée) ---
+  const fetchUnreadCounts = async () => {
+      if (!user?.id) return
+
+      // Appel de la fonction SQL (RPC) créée à l'étape 1
+      const { data, error } = await supabase.rpc('get_unread_counts', { p_user_id: user.id })
+      
+      if (error) {
+          console.error("Erreur chargement notifs:", error)
+          return
+      }
+
+      if (data) {
+          // Conversion du format SQL [{sender_id: "xyz", count: 2}] -> JS { "xyz": 2 }
+          const counts = data.reduce((acc, item) => ({
+              ...acc,
+              [item.sender_id]: Number(item.count) // S'assurer que c'est un nombre
+          }), {})
+          setUnreadCounts(counts)
+      }
+  }
+
+  // --- 2. CHARGEMENT INITIAL DES DONNÉES ---
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
@@ -53,7 +73,7 @@ export default function Dashboard() {
       try {
           if (!myProfile.embedding) { setLoadingMatches(false); return }
 
-          // 1. Matchs RPC
+          // A. Matchs
           const { data: matchedUsers, error: rpcError } = await supabase.rpc('find_best_matches', {
             p_embedding: myProfile.embedding,
             p_match_threshold: 0, 
@@ -63,13 +83,13 @@ export default function Dashboard() {
           })
           if (rpcError) throw rpcError
 
-          // 2. Connexions existantes
+          // B. Connexions
           const { data: allMyConnections } = await supabase
             .from('connections')
             .select('*')
             .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
 
-          // 3. Fusionner les données
+          // C. Fusion
           if (matchedUsers) {
             const matchesWithStatus = matchedUsers
               .filter(p => p.id !== user.id)
@@ -88,67 +108,43 @@ export default function Dashboard() {
             setMatches(matchesWithStatus)
           }
 
-          // 4. Charger les messages non lus
-          const { data: unreadData, error: msgError } = await supabase
-             .from('messages')
-             .select('sender_id')
-             .eq('receiver_id', user.id)
-             .is('read_at', null)
-          
-          if (!msgError && unreadData) {
-              const counts = {}
-              unreadData.forEach(m => {
-                  counts[m.sender_id] = (counts[m.sender_id] || 0) + 1
-              })
-              setUnreadCounts(counts)
-          }
+          // D. Chargement initial des messages non lus
+          await fetchUnreadCounts()
 
       } catch (error) { 
-          console.error("Erreur chargement:", error) 
+          console.error("Erreur globale Dashboard:", error) 
       } finally { 
           setLoadingMatches(false) 
       }
     }
     loadData()
+  }, [user, myProfile, authLoading])
 
-    // -----------------------------------------------------
-    // B. SETUP REALTIME (ROBUSTE)
-    // -----------------------------------------------------
-    const channel = supabase.channel('dashboard-global')
+  // --- 3. GESTION DU REALTIME (NOTIFICATIONS & MATCHS) ---
+  useEffect(() => {
+    if (!user?.id) return
 
-    // Écoute TOUS les changements de CONNEXION (Demande, Acceptation, REJET/SUPPRESSION)
-    channel.on('postgres_changes', { 
-        event: '*', 
-        schema: 'public', 
-        table: 'connections'
-    }, (payload) => {
-        // CAS 1 : SUPPRESSION (Rejet ou Rupture) -> On retire la connexion du match
+    const channel = supabase.channel('dashboard-realtime')
+
+    channel
+    // A. Écoute les changements de CONNEXION (Accept/Rejet)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
         if (payload.eventType === 'DELETE') {
-             setMatches(curr => curr.map(m => {
-                 if (m.connection?.id === payload.old.id) {
-                     return { ...m, connection: null }
-                 }
-                 return m
-             }))
+             setMatches(curr => curr.map(m => m.connection?.id === payload.old.id ? { ...m, connection: null } : m))
         }
-        // CAS 2 : INSERT ou UPDATE (Nouvelle demande ou Acceptation)
         else if (payload.new) {
              setMatches(curr => curr.map(m => {
-                // On vérifie si ce match est concerné (expéditeur ou destinataire)
                 if (m.id === payload.new.sender_id || m.id === payload.new.receiver_id) {
-                     // Si c'est pour moi ou de moi, on met à jour
-                     const isRelevant = 
-                        (payload.new.sender_id === user.id && payload.new.receiver_id === m.id) ||
-                        (payload.new.receiver_id === user.id && payload.new.sender_id === m.id)
-                     
+                     const isRelevant = (payload.new.sender_id === user.id && payload.new.receiver_id === m.id) ||
+                                        (payload.new.receiver_id === user.id && payload.new.sender_id === m.id)
                      if (isRelevant) return { ...m, connection: payload.new }
                 }
                 return m
              }))
         }
     })
-
-    // Écoute Nouveaux MESSAGES
+    
+    // B. Écoute les NOUVEAUX MESSAGES (Incrémentation instantanée)
     .on('postgres_changes', { 
         event: 'INSERT', 
         schema: 'public', 
@@ -157,34 +153,40 @@ export default function Dashboard() {
     }, (payload) => {
         const senderId = payload.new.sender_id
         
-        // LOGIQUE CRITIQUE : Si je suis DÉJÀ en train de chatter avec cette personne,
-        // je n'incrémente PAS le compteur (je vois le message en direct).
-        if (activeChatUserIdRef.current === senderId) {
-            return 
-        }
+        // Si le chat est ouvert avec cette personne, on ignore (c'est lu direct)
+        if (activeChatUserIdRef.current === senderId) return 
 
+        // Sinon, on incrémente localement (+1)
         setUnreadCounts(prev => ({
             ...prev,
             [senderId]: (prev[senderId] || 0) + 1
         }))
     })
 
-    channel.subscribe()
+    // C. Écoute les MISES À JOUR (Lecture faite ailleurs)
+    .on('postgres_changes', { 
+        event: 'UPDATE', 
+        schema: 'public', 
+        table: 'messages', 
+        filter: `receiver_id=eq.${user.id}` 
+    }, () => {
+        // Si un message passe à "lu" (update read_at), on re-vérifie tout via la base
+        fetchUnreadCounts()
+    })
+
+    .subscribe()
 
     return () => { supabase.removeChannel(channel) }
 
-  }, [user, myProfile, authLoading])
+  }, [user?.id])
 
-  // --- LOGIQUE D'INTERACTION ---
+  // --- HELPER : Actions UI ---
 
-  // Appelé quand on clique sur une node (ouvre le profil/layer)
   const handleUserSelect = (targetUser) => {
     setShowMobileList(false)
     setSelectedUser(targetUser)
     
-    // NOTE : On ne supprime PLUS le compteur ici ! 
-    // "le layer ne suffit pas", il faut entrer dans le chat pour marquer comme lu.
-
+    // UI Responsive
     if (window.innerWidth < 768) {
         setIsSidebarVisible(false)
         setTimeout(() => setIsSidebarVisible(true), 1500)
@@ -193,16 +195,15 @@ export default function Dashboard() {
     }
   }
 
-  // Callback passé au Sidebar pour savoir si on est dans le chat
+  // Appelé par UserProfileSidebar quand le chat s'ouvre/ferme
   const handleChatStatusChange = (userId, isOpen) => {
-      // 1. Mettre à jour la Ref pour le Realtime
       activeChatUserIdRef.current = isOpen ? userId : null
       
-      // 2. Si on ouvre le chat, on efface le compteur VISUELLEMENT
+      // Si on ouvre le chat, on remet le compteur à 0 visuellement
       if (isOpen) {
           setUnreadCounts(prev => {
               const newCounts = { ...prev }
-              delete newCounts[userId]
+              delete newCounts[userId] // On retire la clé pour ce user
               return newCounts
           })
       }
@@ -210,14 +211,13 @@ export default function Dashboard() {
 
   const handleCloseProfile = () => {
       setIsSidebarVisible(false)
-      // Quand on ferme tout, on n'est plus dans aucun chat
       activeChatUserIdRef.current = null
       setTimeout(() => setSelectedUser(null), 300)
   }
 
   const handleLogout = async () => await supabase.auth.signOut() 
 
-  // --- FILTRAGE ---
+  // --- CALCUL DES FILTRES ---
   const processedMatches = useMemo(() => {
     let filtered = matches
     if (!showFriends) filtered = filtered.filter(m => m.connection?.status !== 'accepted')
@@ -362,7 +362,6 @@ export default function Dashboard() {
                     similarity={selectedUser.score} 
                     initialUnreadCount={unreadCounts[selectedUser.id] || 0} 
                     onClose={handleCloseProfile}
-                    // C'est ICI que l'on passe la fonction cruciale pour la synchronisation
                     onChatStatusChange={handleChatStatusChange} 
                 />
               </>
