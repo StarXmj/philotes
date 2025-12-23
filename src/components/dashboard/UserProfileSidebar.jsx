@@ -1,45 +1,31 @@
-import { useEffect, useState, useRef } from 'react'
+// src/components/dashboard/UserProfileSidebar.jsx
+import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { BrainCircuit, X, Unlink, Sparkles, Lock, MessageCircle, UserPlus, CheckCircle, Clock, ShieldCheck, UserX } from 'lucide-react'
+import { X, Unlink, Sparkles, Lock, MessageCircle, UserPlus, CheckCircle, Clock, ShieldCheck, UserX } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import ChatInterface from '../chat/ChatInterface'
 
-export default function UserProfileSidebar({ userId, onClose, similarity, onChatStatusChange, initialUnreadCount = 0 }) {
+export default function UserProfileSidebar({ userId, onClose, similarity, unreadCount }) {
   const [view, setView] = useState('PROFILE')
   const [profile, setProfile] = useState(null)
   const [answers, setAnswers] = useState([])
   const [connection, setConnection] = useState(null)
   const [currentUser, setCurrentUser] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [unreadCount, setUnreadCount] = useState(initialUnreadCount) 
 
-  // --- REFS CRITIQUES POUR LE TEMPS RÉEL ---
-  // Ces refs permettent au Realtime d'accéder aux valeurs "fraîches" sans redémarrer l'écouteur
-  const connectionRef = useRef(null)
-  const viewRef = useRef(view)
-  
-  // On synchronise les refs à chaque changement d'état
-  useEffect(() => { connectionRef.current = connection }, [connection])
-  useEffect(() => { viewRef.current = view }, [view])
-  // Synchronisation du compteur si le parent le met à jour
-  useEffect(() => { if (view === 'PROFILE') setUnreadCount(initialUnreadCount) }, [initialUnreadCount])
-
-  // 1. CHARGEMENT INITIAL DES DONNÉES
+  // 1. CHARGEMENT
   useEffect(() => {
     const init = async () => {
       setLoading(true)
       const { data: { user } } = await supabase.auth.getUser()
       setCurrentUser(user)
 
-      // Charger Profil
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).single()
       setProfile(prof)
 
-      // Charger Réponses (Vibe)
       const { data: ans } = await supabase.from('user_answers').select('question_id, questions(text), options(text)').eq('user_id', userId)
       setAnswers(ans || [])
 
-      // Charger Connexion
       const { data: conn } = await supabase
         .from('connections')
         .select('*')
@@ -52,62 +38,32 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
     if (userId) init()
   }, [userId])
 
-  // 2. ABONNEMENT TEMPS RÉEL (ROBUSTE)
+  // 2. REALTIME (Pour la connexion seulement, pas les messages, c'est le hook global qui s'en charge)
   useEffect(() => {
-    // On ne s'abonne que si on sait QUI on est et QUI on regarde
     if (!currentUser || !userId) return
-
-    const myId = currentUser.id
     const channel = supabase.channel(`sidebar-${userId}`)
-
-    channel
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
-        // CAS : SUPPRESSION (Rupture)
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
         if (payload.eventType === 'DELETE') {
-             // On vérifie si l'ID supprimé correspond à notre connexion actuelle (via la Ref)
-             if (connectionRef.current && payload.old.id === connectionRef.current.id) {
-                 setConnection(null) // On casse le lien immédiatement
-             }
+             if (connection && payload.old.id === connection.id) setConnection(null)
         } 
-        // CAS : INSERTION (Demande) ou UPDATE (Acceptation)
         else if (payload.new) {
              const isRelevant = 
-               (payload.new.sender_id === myId && payload.new.receiver_id === userId) || 
-               (payload.new.receiver_id === myId && payload.new.sender_id === userId)
-             
-             if (isRelevant) {
-                 setConnection(payload.new) // On met à jour (En attente -> Accepté, ou Nouveau lien)
-             }
+               (payload.new.sender_id === currentUser.id && payload.new.receiver_id === userId) || 
+               (payload.new.receiver_id === currentUser.id && payload.new.sender_id === userId)
+             if (isRelevant) setConnection(payload.new)
         }
-      })
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
-         // Notification message
-         if (payload.new.sender_id === userId && viewRef.current === 'PROFILE') {
-            setUnreadCount(prev => prev + 1)
-         }
-      })
-      .subscribe()
-
+    }).subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [userId, currentUser]) // <-- IMPORTANT : Dépend de currentUser pour avoir le bon ID
-
-  useEffect(() => {
-    return () => { if (onChatStatusChange) onChatStatusChange(userId, false) }
-  }, [userId, onChatStatusChange])
-
-  // --- ACTIONS ---
+  }, [userId, currentUser, connection])
 
   const handleCreateConnection = async (firstMessage) => {
     const tempConn = { status: 'pending', sender_id: currentUser.id, receiver_id: userId }
     setConnection(tempConn)
-
     const { data: newConn, error: connError } = await supabase
       .from('connections')
       .insert({ sender_id: currentUser.id, receiver_id: userId, status: 'pending', message: firstMessage })
       .select().single()
-
     if (connError) throw connError
-
     await supabase.from('messages').insert({ connection_id: newConn.id, sender_id: currentUser.id, content: firstMessage })
     setConnection(newConn)
     return newConn
@@ -130,29 +86,19 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
 
   const handleBreakLink = async () => {
     if (window.confirm("Es-tu sûr de vouloir couper le lien ?")) {
-      // On supprime localement tout de suite (optimiste)
       const connId = connection.id
       setConnection(null)
       setView('PROFILE')
-      // Puis on supprime en base
       await supabase.from('connections').delete().eq('id', connId)
     }
   }
 
   const openChat = () => {
     setView('CHAT')
-    setUnreadCount(0)
-    if (onChatStatusChange) onChatStatusChange(userId, true)
   }
 
   const handleBackToProfile = () => {
     setView('PROFILE')
-    if (onChatStatusChange) onChatStatusChange(userId, false)
-  }
-
-  const handleClose = () => {
-    if (onChatStatusChange) onChatStatusChange(userId, false)
-    onClose()
   }
 
   const isAccepted = connection?.status === 'accepted'
@@ -194,7 +140,7 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
                   <Unlink size={20} />
                 </button>
               )}
-              <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-full transition"><X size={24} /></button>
+              <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition"><X size={24} /></button>
             </div>
           </div>
 
@@ -202,9 +148,9 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
             <div className="p-8 text-center text-gray-400">Scan en cours...</div>
           ) : (
             <div className="p-6 space-y-8 pb-32">
-              
               <div className="text-center relative">
                 <div className="w-24 h-24 bg-gradient-to-br from-philo-primary to-philo-secondary rounded-full mx-auto flex items-center justify-center mb-3 shadow-lg shadow-purple-500/20 relative">
+                   {/* BADGE ICI - Si unreadCount global > 0 */}
                    {unreadCount > 0 && (
                      <div className="absolute top-0 right-0 w-6 h-6 bg-red-500 rounded-full border-2 border-slate-900 flex items-center justify-center text-white text-[10px] font-bold animate-bounce z-20">
                        {unreadCount}
@@ -212,6 +158,7 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
                    )}
                   <span className="text-4xl font-bold text-white">{profile?.pseudo?.substring(0,2).toUpperCase()}</span>
                 </div>
+                {/* ... (Reste du profil inchangé) ... */}
                 <h3 className="text-2xl font-bold text-white">{profile?.pseudo}</h3>
                 
                 <div className="mt-2 inline-flex items-center gap-1 bg-philo-primary/20 text-philo-primary px-3 py-1 rounded-full text-xs font-bold border border-philo-primary/30">
@@ -219,10 +166,10 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
                 </div>
 
                 <div className="mt-6 grid grid-cols-2 gap-2 text-sm">
-                  <motion.div animate={{ filter: isAccepted ? "blur(0px)" : "blur(0px)" }} className={`p-3 rounded-xl border border-white/5 transition-colors duration-500 ${isAccepted ? 'bg-white/5' : 'bg-black/40'}`}>
+                  <div className={`p-3 rounded-xl border border-white/5 transition-colors duration-500 ${isAccepted ? 'bg-white/5' : 'bg-black/40'}`}>
                     <span className="block text-gray-500 text-[10px] uppercase">Campus</span>
                     <div className={!isAccepted ? "blur-sm select-none" : ""}>{profile?.etudes_lieu || "???"}</div>
-                  </motion.div>
+                  </div>
                   <div className={`p-3 rounded-xl border border-white/5 transition-colors duration-500 ${isAccepted ? 'bg-white/5' : 'bg-black/40'}`}>
                     <span className="block text-gray-500 text-[10px] uppercase">Filière</span>
                     <div className={!isAccepted ? "blur-sm select-none" : ""}>{profile?.intitule || "???"}</div>
@@ -266,6 +213,7 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
                       <UserPlus size={20} /> Demander un lien
                     </button>
                     <button onClick={openChat} className="w-full py-3 bg-gradient-to-r from-philo-primary to-philo-secondary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20 relative">
+                       {/* BADGE BOUTON */}
                        {unreadCount > 0 && (
                           <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs w-6 h-6 rounded-full flex items-center justify-center border-2 border-slate-900 animate-bounce z-40">
                             {unreadCount}
@@ -290,6 +238,7 @@ export default function UserProfileSidebar({ userId, onClose, similarity, onChat
 
                 {isAccepted && (
                    <button onClick={openChat} className="w-full py-3 bg-philo-primary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 relative">
+                    {/* BADGE BOUTON CONFIRMÉ */}
                     {unreadCount > 0 && (
                         <span className="absolute -top-3 -right-2 bg-red-500 text-white text-xs w-6 h-6 rounded-full flex items-center justify-center border-2 border-slate-900 animate-bounce z-40 shadow-lg">
                           {unreadCount}

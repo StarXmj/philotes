@@ -1,14 +1,14 @@
+// src/pages/Dashboard.jsx
 import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { AnimatePresence, motion } from 'framer-motion'
 import { UserCircle, LogOut, Filter, X, List, ChevronLeft, ChevronRight, PanelLeftOpen, PanelRightOpen, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { useNotifications } from '../hooks/useNotifications'
+import { useNotifications } from '../hooks/useNotifications' // <--- IMPORT DU HOOK
 
 import ConstellationView from '../components/dashboard/ConstellationView'
 import Constellation3D from '../components/dashboard/Constellation3D'
-
 import DashboardFilters from '../components/dashboard/DashboardFilters'
 import ListView from '../components/dashboard/ListView'
 import UserProfileSidebar from '../components/dashboard/UserProfileSidebar'
@@ -17,18 +17,15 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const { user, profile: myProfile, loading: authLoading } = useAuth()
   
-  // --- 1. GESTION CENTRALISÉE DES NOTIFICATIONS ---
+  // --- 1. SOURCE DE VÉRITÉ UNIQUE ---
   const notifications = useNotifications()
 
-  // Transformation des données du hook pour correspondre au format attendu par les vues ({ userId: count })
-  // On ne garde que les compteurs > 0
+  // On prépare l'objet simple { userId: count } pour les vues
   const unreadCounts = useMemo(() => {
     const counts = {}
     if (notifications) {
       Object.entries(notifications).forEach(([id, data]) => {
-        if (data.unreadCount > 0) {
-            counts[id] = data.unreadCount
-        }
+        if (data.unreadCount > 0) counts[id] = data.unreadCount
       })
     }
     return counts
@@ -54,7 +51,7 @@ export default function Dashboard() {
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
-  // 1. CHARGEMENT DES DONNÉES (MATCHS & CONNEXIONS)
+  // 1. CHARGEMENT DES DONNÉES
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
@@ -73,13 +70,13 @@ export default function Dashboard() {
           })
           if (rpcError) throw rpcError
 
-          // 2. Connexions existantes
+          // 2. Connexions
           const { data: allMyConnections } = await supabase
             .from('connections')
             .select('*')
             .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
 
-          // 3. Fusionner les données
+          // 3. Fusion
           if (matchedUsers) {
             const matchesWithStatus = matchedUsers
               .filter(p => p.id !== user.id)
@@ -105,48 +102,25 @@ export default function Dashboard() {
     }
     loadData()
 
-    // -----------------------------------------------------
-    // B. SETUP REALTIME (CONNEXIONS UNIQUEMENT)
-    // -----------------------------------------------------
-    const channel = supabase.channel('dashboard-global')
-
-    // Écoute changements de CONNEXION (Demande, Acceptation, Rejet)
-    channel.on('postgres_changes', { 
-        event: '*', 
-        schema: 'public', 
-        table: 'connections'
-    }, (payload) => {
-        // CAS 1 : SUPPRESSION (Rejet ou Rupture)
+    // SETUP REALTIME (CONNEXIONS SEULEMENT - Les messages sont gérés par le hook)
+    const channel = supabase.channel('dashboard-connections')
+    channel.on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
         if (payload.eventType === 'DELETE') {
-             setMatches(curr => curr.map(m => {
-                 if (m.connection?.id === payload.old.id) {
-                     return { ...m, connection: null }
-                 }
-                 return m
-             }))
-        }
-        // CAS 2 : INSERT ou UPDATE (Nouvelle demande reçue ou acceptée)
-        else if (payload.new) {
+             setMatches(curr => curr.map(m => m.connection?.id === payload.old.id ? { ...m, connection: null } : m))
+        } else if (payload.new) {
              setMatches(curr => curr.map(m => {
                 if (m.id === payload.new.sender_id || m.id === payload.new.receiver_id) {
-                     const isRelevant = 
-                        (payload.new.sender_id === user.id && payload.new.receiver_id === m.id) ||
-                        (payload.new.receiver_id === user.id && payload.new.sender_id === m.id)
-                     
+                     const isRelevant = (payload.new.sender_id === user.id && payload.new.receiver_id === m.id) ||
+                                        (payload.new.receiver_id === user.id && payload.new.sender_id === m.id)
                      if (isRelevant) return { ...m, connection: payload.new }
                 }
                 return m
              }))
         }
-    })
-
-    channel.subscribe()
+    }).subscribe()
 
     return () => { supabase.removeChannel(channel) }
-
   }, [user, myProfile, authLoading])
-
-  // --- LOGIQUE D'INTERACTION ---
 
   const handleUserSelect = (targetUser) => {
     setShowMobileList(false)
@@ -164,10 +138,8 @@ export default function Dashboard() {
       setIsSidebarVisible(false)
       setTimeout(() => setSelectedUser(null), 300)
   }
-
   const handleLogout = async () => await supabase.auth.signOut() 
 
-  // --- FILTRAGE ---
   const processedMatches = useMemo(() => {
     let filtered = matches
     if (!showFriends) filtered = filtered.filter(m => m.connection?.status !== 'accepted')
@@ -178,8 +150,7 @@ export default function Dashboard() {
         return pct >= min && pct <= max
     })
     if (searchQuery.trim() !== '') {
-        const query = searchQuery.toLowerCase()
-        filtered = filtered.filter(m => m.pseudo?.toLowerCase().includes(query))
+        filtered = filtered.filter(m => m.pseudo?.toLowerCase().includes(searchQuery.toLowerCase()))
     }
     filtered.sort((a, b) => isOppositeMode ? a.score - b.score : b.score - a.score)
     return filtered
@@ -191,13 +162,7 @@ export default function Dashboard() {
       <div className="px-4 pb-4">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-philo-primary transition" size={16} />
-            <input 
-                type="text" 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Chercher un étudiant..." 
-                className="w-full bg-slate-800/50 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white focus:outline-none focus:border-philo-primary focus:bg-slate-800 transition shadow-inner placeholder:text-gray-600"
-            />
+            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Chercher un étudiant..." className="w-full bg-slate-800/50 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white focus:outline-none focus:border-philo-primary focus:bg-slate-800 transition shadow-inner placeholder:text-gray-600"/>
             {searchQuery && (<button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"><X size={14} /></button>)}
           </div>
       </div>
@@ -205,32 +170,23 @@ export default function Dashboard() {
 
   return (
     <div className="h-screen bg-philo-dark text-white p-4 relative overflow-hidden flex flex-col">
-      {/* NAVBAR */}
       <div className="flex justify-between items-center z-30 w-full max-w-full mx-auto py-2 px-4 md:px-10 shrink-0 relative">
         <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
         
         <div className="absolute left-1/2 -translate-x-1/2 flex items-center bg-slate-800 rounded-full p-1 border border-white/10 shadow-lg">
-            <button onClick={() => setIs3D(false)} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-300 z-10 ${!is3D ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
-                2D {!is3D && <motion.div layoutId="activeTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}
-            </button>
-            <button onClick={() => setIs3D(true)} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-300 z-10 ${is3D ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
-                3D {is3D && <motion.div layoutId="activeTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}
-            </button>
+            <button onClick={() => setIs3D(false)} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-300 z-10 ${!is3D ? 'text-white' : 'text-gray-400 hover:text-white'}`}>2D {!is3D && <motion.div layoutId="activeTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}</button>
+            <button onClick={() => setIs3D(true)} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-300 z-10 ${is3D ? 'text-white' : 'text-gray-400 hover:text-white'}`}>3D {is3D && <motion.div layoutId="activeTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}</button>
         </div>
 
         <div className="flex gap-2 items-center">
           <button onClick={() => navigate('/profile')} className="rounded-full hover:opacity-80 transition overflow-hidden border border-white/20 w-10 h-10">
-             {myProfile?.avatar_prive ? <img src={myProfile.avatar_prive} className="w-full h-full object-cover" /> : 
-              myProfile?.avatar_public ? <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover" /> : 
-              <UserCircle size={38} className="text-gray-300 w-full h-full p-1" />}
+             {myProfile?.avatar_prive ? <img src={myProfile.avatar_prive} className="w-full h-full object-cover" /> : myProfile?.avatar_public ? <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover" /> : <UserCircle size={38} className="text-gray-300 w-full h-full p-1" />}
           </button>
           <button onClick={handleLogout} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition"><LogOut size={20} /></button>
         </div>
       </div>
 
       <div className="flex-1 flex relative overflow-hidden min-h-0">
-          
-          {/* SIDEBAR GAUCHE */}
           <motion.div initial={{ x: 0 }} animate={{ x: isLeftSidebarOpen ? 0 : -300 }} className="hidden md:block absolute left-0 top-0 z-20 h-full w-64 border-r border-white/5 bg-philo-dark/50 backdrop-blur-sm">
              <div className="flex justify-between items-center p-4 border-b border-white/10">
                  <h2 className="text-sm font-bold uppercase text-gray-400">Filtres</h2>
@@ -239,7 +195,6 @@ export default function Dashboard() {
              <div className="overflow-y-auto h-[calc(100%-60px)]"><DashboardFilters showFriends={showFriends} setShowFriends={setShowFriends} setMatchRange={setMatchRange} isOppositeMode={isOppositeMode} setIsOppositeMode={setIsOppositeMode}/></div>
           </motion.div>
 
-          {/* SIDEBAR DROITE */}
           <motion.div initial={{ x: 0 }} animate={{ x: isRightSidebarOpen ? 0 : 450 }} className="hidden md:block absolute right-0 top-0 z-20 h-full w-80 lg:w-96 border-l border-white/10 bg-slate-900/30 backdrop-blur-sm">
              <div className="h-full flex flex-col">
                 <div className="p-4 border-b border-white/10 shrink-0 flex justify-between items-center mb-2">
@@ -251,38 +206,21 @@ export default function Dashboard() {
              </div>
           </motion.div>
 
-          {/* BOUTONS FLOTTANTS */}
           {!isLeftSidebarOpen && (<motion.button initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsLeftSidebarOpen(true)} className="hidden md:flex absolute left-4 top-4 z-30 p-2 bg-slate-800/80 backdrop-blur-md border border-white/10 rounded-lg text-white shadow-lg"><PanelLeftOpen size={20}/></motion.button>)}
           {!isRightSidebarOpen && (<motion.button initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsRightSidebarOpen(true)} className="hidden md:flex absolute right-4 top-4 z-30 p-2 bg-slate-800/80 backdrop-blur-md border border-white/10 rounded-lg text-white shadow-lg"><PanelRightOpen size={20}/></motion.button>)}
 
-          {/* ZONE CENTRALE (PASSAGE DES NOTIFICATIONS AUX VUES) */}
           <div className={`flex-1 relative overflow-hidden w-full h-full transition-all duration-300 ease-in-out ${isLeftSidebarOpen ? 'md:pl-64' : 'md:pl-0'} ${isRightSidebarOpen ? 'md:pr-80 lg:pr-96' : 'md:pr-0'}`}>
              {is3D ? (
-                <Constellation3D 
-                    matches={processedMatches} 
-                    myProfile={myProfile} 
-                    onSelectUser={handleUserSelect} 
-                    selectedUser={selectedUser}
-                    unreadCounts={unreadCounts}
-                    myId={user?.id}
-                />
+                <Constellation3D matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id}/>
              ) : (
-                <ConstellationView 
-                    matches={processedMatches} 
-                    myProfile={myProfile} 
-                    onSelectUser={handleUserSelect} 
-                    unreadCounts={unreadCounts}
-                    myId={user?.id}
-                />
+                <ConstellationView matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id}/>
              )}
           </div>
 
-          {/* MOBILE BOUTONS */}
           <div className="md:hidden absolute top-4 left-0 z-20"><button onClick={() => setShowMobileFilters(true)} className="p-3 bg-slate-800/80 backdrop-blur-md border border-white/10 rounded-r-xl text-white"><Filter size={24} /></button></div>
           <div className="md:hidden absolute top-4 right-0 z-20"><button onClick={() => setShowMobileList(true)} className="p-3 bg-slate-800/80 backdrop-blur-md border border-white/10 rounded-l-xl text-white"><List size={24} /></button></div>
       </div>
 
-      {/* DRAWERS MOBILE */}
       <AnimatePresence>
           {showMobileFilters && (<motion.div className="fixed inset-0 z-50 flex"><div className="fixed inset-0 bg-black/60" onClick={() => setShowMobileFilters(false)}/><motion.div className="relative w-3/4 max-w-xs bg-slate-900 p-6 shadow-2xl h-full"><DashboardFilters showFriends={showFriends} setShowFriends={setShowFriends} setMatchRange={setMatchRange} isOppositeMode={isOppositeMode} setIsOppositeMode={setIsOppositeMode}/></motion.div></motion.div>)}
       </AnimatePresence>
@@ -302,7 +240,6 @@ export default function Dashboard() {
           )}
       </AnimatePresence>
 
-      {/* SIDEBAR PROFIL */}
       <AnimatePresence>
           {(selectedUser && isSidebarVisible) && (
               <>
@@ -310,7 +247,8 @@ export default function Dashboard() {
                 <UserProfileSidebar 
                     userId={selectedUser.id} 
                     similarity={selectedUser.score} 
-                    initialUnreadCount={unreadCounts[selectedUser.id] || 0} 
+                    // ON PASSE LE COUNT GLOBAL ICI
+                    unreadCount={unreadCounts[selectedUser.id] || 0} 
                     onClose={handleCloseProfile}
                 />
               </>

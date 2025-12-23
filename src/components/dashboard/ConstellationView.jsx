@@ -1,8 +1,9 @@
+// src/components/dashboard/ConstellationView.jsx
 import { useMemo, useRef, useState, memo } from 'react'
 import { motion } from 'framer-motion'
 import { User, ZoomIn, ZoomOut, RotateCcw, Move } from 'lucide-react'
 
-// --- COMPOSANTS OPTIMISÉS (CSS vs JS) ---
+// --- COMPOSANTS OPTIMISÉS (Définis ici pour éviter le ReferenceError) ---
 
 const OrbitalRing = ({ radius, duration, children, reverse = false }) => (
     <div className="absolute flex items-center justify-center pointer-events-none" style={{ width: radius * 2, height: radius * 2 }}>
