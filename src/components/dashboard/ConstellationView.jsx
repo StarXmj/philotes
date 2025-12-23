@@ -37,7 +37,6 @@ const Planet = ({ angle, radius, duration, reverse = false, children }) => {
 }
 
 // --- NODE INTELLIGENT AVEC NOTIFICATIONS ---
-// J'ai retiré la fonction de comparaison personnalisée à la fin pour garantir la mise à jour
 const MatchNode = memo(({ match, onClick, unreadCount, myId }) => {
     const isFriend = match.connection?.status === 'accepted'
     
@@ -92,21 +91,21 @@ const MatchNode = memo(({ match, onClick, unreadCount, myId }) => {
                  <User className="text-gray-500 m-auto mt-2 w-4 h-4"/>}
             </div>
 
-            {/* BADGE "NEW" (DEMANDE DE LIEN) */}
+            {/* BADGE "NEW" (DEMANDE DE LIEN) - EN HAUT À DROITE */}
             {isPendingRequest && (
-                <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-green-500 text-black text-[9px] font-black px-2 py-0.5 rounded-full shadow-xl z-50 animate-bounce border border-white/20">
+                <div className="absolute -top-3 -right-3 bg-green-500 text-black text-[9px] font-black px-1.5 py-0.5 rounded-full shadow-xl z-50 animate-bounce border border-white/20">
                     NEW
                 </div>
             )}
 
-            {/* BADGE COMPTEUR (MESSAGES) - CORRIGÉ : On l'affiche même si c'est une demande d'ami */}
-{hasUnreadMessages && (
-    <div className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full shadow-xl z-50 border-2 border-slate-900 animate-pulse">
-        {unreadCount}
-    </div>
-)}
+            {/* BADGE COMPTEUR (MESSAGES) - EN HAUT À DROITE (SI PAS DE DEMANDE) */}
+            {hasUnreadMessages && !isPendingRequest && (
+                <div className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-bold min-w-[20px] h-5 flex items-center justify-center rounded-full shadow-xl z-50 border-2 border-slate-900 animate-pulse px-1">
+                    {unreadCount}
+                </div>
+            )}
 
-            {/* SCORE (caché si notif importante pour ne pas surcharger) */}
+            {/* SCORE (en bas) */}
             {!isPendingRequest && !hasUnreadMessages && pct > 40 && (
                 <div className={`absolute -bottom-1 inset-x-0 text-[7px] font-bold text-center py-0.5 text-white rounded-full ${bgGradient}`}>
                     {pct}%
