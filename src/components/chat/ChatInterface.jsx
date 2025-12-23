@@ -80,16 +80,17 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     setTimeout(() => setErrorToast(null), 4000)
   }
 
-  // --- NOUVELLE FONCTION : MARQUER COMME LU EN DB ---
+  // --- FONCTION CRITIQUE : MARQUER COMME LU ---
+  // Cette fonction nettoie la DB, ce qui fera disparaître la notif via le hook global
   const markAsRead = async () => {
     if (!connection?.id || !currentUser?.id) return
 
-    // On update SEULEMENT les messages qui me sont destinés et qui sont non lus
+    // On update SEULEMENT les messages qui me sont destinés (receiver = moi) et qui sont non lus
     const { error } = await supabase
       .from('messages')
       .update({ read_at: new Date().toISOString() })
       .eq('connection_id', connection.id)
-      .eq('receiver_id', currentUser.id)
+      .eq('receiver_id', currentUser.id) 
       .is('read_at', null)
 
     if (error) console.error("Erreur markAsRead:", error)
@@ -114,7 +115,8 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
       if (offset === 0) {
         setMessages(newMessages)
         setTimeout(() => scrollToBottom(), 100)
-        // APPEL ICI : Quand j'ouvre le chat, je marque tout comme lu
+        
+        // --- ACTION : On marque comme lu dès l'ouverture du chat ---
         markAsRead()
       } else {
         setMessages(prev => [...newMessages, ...prev])
@@ -145,7 +147,8 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
           setIsRemoteTyping(false)
           setTimeout(() => scrollToBottom(), 100)
 
-          // APPEL ICI : Si je reçois un message alors que le chat est ouvert
+          // --- ACTION : Si je reçois un message PENDANT que je regarde le chat ---
+          // On vérifie que le message est pour moi avant de le marquer comme lu
           if (payload.new.receiver_id === currentUser.id) {
               markAsRead()
           }

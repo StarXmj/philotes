@@ -1,9 +1,10 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { AnimatePresence, motion } from 'framer-motion'
 import { UserCircle, LogOut, Filter, X, List, ChevronLeft, ChevronRight, PanelLeftOpen, PanelRightOpen, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useNotifications } from '../hooks/useNotifications'
 
 import ConstellationView from '../components/dashboard/ConstellationView'
 import Constellation3D from '../components/dashboard/Constellation3D'
@@ -16,6 +17,23 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const { user, profile: myProfile, loading: authLoading } = useAuth()
   
+  // --- 1. GESTION CENTRALISÉE DES NOTIFICATIONS ---
+  const notifications = useNotifications()
+
+  // Transformation des données du hook pour correspondre au format attendu par les vues ({ userId: count })
+  // On ne garde que les compteurs > 0
+  const unreadCounts = useMemo(() => {
+    const counts = {}
+    if (notifications) {
+      Object.entries(notifications).forEach(([id, data]) => {
+        if (data.unreadCount > 0) {
+            counts[id] = data.unreadCount
+        }
+      })
+    }
+    return counts
+  }, [notifications])
+
   const [matches, setMatches] = useState([])
   const [loadingMatches, setLoadingMatches] = useState(true)
   
@@ -23,9 +41,6 @@ export default function Dashboard() {
   const [selectedUser, setSelectedUser] = useState(null)
   const [isSidebarVisible, setIsSidebarVisible] = useState(false)
   const [is3D, setIs3D] = useState(false) 
-
-  // --- SUIVI CHAT ACTIF (CRUCIAL POUR NOTIFS) ---
-  const activeChatUserIdRef = useRef(null) 
 
   // --- FILTRES ---
   const [showFriends, setShowFriends] = useState(true)
@@ -39,10 +54,7 @@ export default function Dashboard() {
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
-  // --- NOTIFICATIONS (MESSAGES) ---
-  const [unreadCounts, setUnreadCounts] = useState({}) 
-
-  // 1. CHARGEMENT DES DONNÉES
+  // 1. CHARGEMENT DES DONNÉES (MATCHS & CONNEXIONS)
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
@@ -85,22 +97,6 @@ export default function Dashboard() {
               })
             setMatches(matchesWithStatus)
           }
-
-          // 4. Charger les messages non lus initiaux
-          const { data: unreadData, error: msgError } = await supabase
-             .from('messages')
-             .select('sender_id')
-             .eq('receiver_id', user.id)
-             .is('read_at', null)
-          
-          if (!msgError && unreadData) {
-              const counts = {}
-              unreadData.forEach(m => {
-                  counts[m.sender_id] = (counts[m.sender_id] || 0) + 1
-              })
-              setUnreadCounts(counts)
-          }
-
       } catch (error) { 
           console.error("Erreur chargement:", error) 
       } finally { 
@@ -110,11 +106,11 @@ export default function Dashboard() {
     loadData()
 
     // -----------------------------------------------------
-    // B. SETUP REALTIME (NOTIFICATIONS & CONNEXIONS)
+    // B. SETUP REALTIME (CONNEXIONS UNIQUEMENT)
     // -----------------------------------------------------
     const channel = supabase.channel('dashboard-global')
 
-    // 1. Écoute changements de CONNEXION (Demande, Acceptation, Rejet)
+    // Écoute changements de CONNEXION (Demande, Acceptation, Rejet)
     channel.on('postgres_changes', { 
         event: '*', 
         schema: 'public', 
@@ -132,9 +128,7 @@ export default function Dashboard() {
         // CAS 2 : INSERT ou UPDATE (Nouvelle demande reçue ou acceptée)
         else if (payload.new) {
              setMatches(curr => curr.map(m => {
-                // On vérifie si ce match est concerné
                 if (m.id === payload.new.sender_id || m.id === payload.new.receiver_id) {
-                     // Vérif de sécurité pour être sûr que c'est une de mes connexions
                      const isRelevant = 
                         (payload.new.sender_id === user.id && payload.new.receiver_id === m.id) ||
                         (payload.new.receiver_id === user.id && payload.new.sender_id === m.id)
@@ -144,27 +138,6 @@ export default function Dashboard() {
                 return m
              }))
         }
-    })
-
-    // 2. Écoute Nouveaux MESSAGES (Notification)
-    .on('postgres_changes', { 
-        event: 'INSERT', 
-        schema: 'public', 
-        table: 'messages', 
-        filter: `receiver_id=eq.${user.id}` 
-    }, (payload) => {
-        const senderId = payload.new.sender_id
-        
-        // LOGIQUE CRITIQUE : Si je suis DÉJÀ en train de chatter avec cette personne,
-        // je n'incrémente PAS le compteur (je vois le message en direct).
-        if (activeChatUserIdRef.current === senderId) {
-            return 
-        }
-
-        setUnreadCounts(prev => ({
-            ...prev,
-            [senderId]: (prev[senderId] || 0) + 1
-        }))
     })
 
     channel.subscribe()
@@ -187,24 +160,8 @@ export default function Dashboard() {
     }
   }
 
-  // C'est cette fonction qui gère la suppression de la notif quand on ouvre le chat
-  const handleChatStatusChange = (userId, isOpen) => {
-      // 1. Mettre à jour la Ref pour empêcher les futures notifs Realtime
-      activeChatUserIdRef.current = isOpen ? userId : null
-      
-      // 2. Si on ouvre le chat, on efface le compteur VISUELLEMENT immédiatement
-      if (isOpen) {
-          setUnreadCounts(prev => {
-              const newCounts = { ...prev }
-              delete newCounts[userId]
-              return newCounts
-          })
-      }
-  }
-
   const handleCloseProfile = () => {
       setIsSidebarVisible(false)
-      activeChatUserIdRef.current = null
       setTimeout(() => setSelectedUser(null), 300)
   }
 
@@ -355,8 +312,6 @@ export default function Dashboard() {
                     similarity={selectedUser.score} 
                     initialUnreadCount={unreadCounts[selectedUser.id] || 0} 
                     onClose={handleCloseProfile}
-                    // C'est ICI que l'on passe la fonction cruciale pour la synchronisation
-                    onChatStatusChange={handleChatStatusChange} 
                 />
               </>
           )}
