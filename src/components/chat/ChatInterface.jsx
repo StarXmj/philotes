@@ -130,14 +130,34 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   }
   const onEmojiClick = (emojiObject) => { setInputText(prev => prev + emojiObject.emoji); setShowEmojiPicker(false) }
   const sendMessage = async (e) => {
-    e.preventDefault(); if (!inputText.trim()) return
-    const text = inputText; setInputText(''); setShowEmojiPicker(false)
+    e.preventDefault()
+    if (!inputText.trim()) return
+    const text = inputText
+    setInputText('')
+    setShowEmojiPicker(false)
+    
     try {
       let currentConn = connection
-      if (!currentConn) currentConn = await onCreateConnection(text)
-      else await supabase.from('messages').insert({ connection_id: currentConn.id, sender_id: currentUser.id, content: text })
+      // Cas 1 : Premier message (création du lien)
+      if (!currentConn) {
+        currentConn = await onCreateConnection(text)
+      } 
+      // Cas 2 : Discussion existante
+      else {
+        const { error } = await supabase.from('messages').insert({
+          connection_id: currentConn.id,
+          sender_id: currentUser.id,
+          receiver_id: targetUser.id, // <--- C'EST CETTE LIGNE QUI MANQUAIT !
+          content: text
+        })
+        if (error) throw error
+      }
       scrollToBottom()
-    } catch (error) { console.error(error); showToast("Erreur d'envoi."); setInputText(text) }
+    } catch (error) { 
+        console.error(error)
+        showToast("Erreur d'envoi.")
+        setInputText(text)
+    }
   }
 
   return (
