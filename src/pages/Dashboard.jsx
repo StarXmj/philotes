@@ -5,7 +5,6 @@ import { UserCircle, LogOut, Filter, List, ChevronLeft, ChevronRight, PanelLeftO
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
-// Composants
 import ConstellationView from '../components/dashboard/ConstellationView'
 import Constellation3D from '../components/dashboard/Constellation3D'
 import DashboardFilters from '../components/dashboard/DashboardFilters'
@@ -16,8 +15,8 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const { user, profile: myProfile, loading: authLoading } = useAuth()
 
-  // 1. ÉTATS
-  const [unreadCounts, setUnreadCounts] = useState({}) 
+  // --- 1. ETAT DES NOTIFICATIONS (MANUEL & ROBUSTE) ---
+  const [unreadCounts, setUnreadCounts] = useState({})
   const activeChatRef = useRef(null) 
 
   const [matches, setMatches] = useState([])
@@ -36,7 +35,7 @@ export default function Dashboard() {
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
-  // 2. LOGIQUE DE NETTOYAGE NOTIFICATIONS
+  // --- 2. FONCTION DE NETTOYAGE ---
   const markAsRead = useCallback(async (senderId) => {
       setUnreadCounts(prev => {
           const newCounts = { ...prev }
@@ -49,16 +48,18 @@ export default function Dashboard() {
       }
   }, [user])
 
+  // Appelé par la Sidebar quand on ouvre/ferme le chat
   const handleChatStatusChange = useCallback((userId, isChatting) => {
     if (isChatting) {
       activeChatRef.current = String(userId)
+      // C'EST ICI QU'ON NETTOIE LA NOTIF (QUAND LE CHAT S'OUVRE)
       markAsRead(userId)
     } else {
       activeChatRef.current = null
     }
   }, [markAsRead])
 
-  // 3. CHARGEMENT DES DONNÉES + REALTIME
+  // --- 3. CHARGEMENT & REALTIME ---
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
@@ -67,19 +68,18 @@ export default function Dashboard() {
       try {
           if (!myProfile.embedding) { setLoadingMatches(false); return }
 
-          // A. Profils
+          // Récupération de 500 profils
           const { data: matchedUsers } = await supabase.rpc('match_students', {
             query_embedding: myProfile.embedding,
             match_threshold: -1, 
             match_count: 500     
           })
 
-          // B. Connexions
           const { data: allMyConnections } = await supabase
             .from('connections').select('*')
             .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
 
-          // C. Notifs initiales
+          // Notifs initiales
           const { data: unreadMsgs } = await supabase
             .from('messages').select('sender_id')
             .eq('receiver_id', user.id).is('read_at', null)
@@ -90,7 +90,6 @@ export default function Dashboard() {
           })
           setUnreadCounts(initialCounts)
 
-          // D. Fusion
           if (matchedUsers) {
             const matchesWithStatus = matchedUsers
               .filter(p => p.id !== user.id)
@@ -108,58 +107,23 @@ export default function Dashboard() {
               })
             setMatches(matchesWithStatus)
           }
-      } catch (error) { 
-          console.error("Erreur chargement:", error) 
-      } finally { 
-          setLoadingMatches(false) 
-      }
+      } catch (error) { console.error(error) } 
+      finally { setLoadingMatches(false) }
     }
-    // ... (début du useEffect inchangé) ...
     loadData()
 
-    // ---------------------------------------------------------
-    // 4. LE REALTIME "DEBUG" (Avec comparaison de force)
-    // ---------------------------------------------------------
-    console.log("🔌 Initialisation du canal Realtime...")
-    const channel = supabase.channel('dashboard-final-fix')
-
-    channel
-    .on('postgres_changes', { 
-        event: 'INSERT', 
-        schema: 'public', 
-        table: 'messages' 
-    }, (payload) => {
-        // 1. Conversion sécurisée en String pour éviter les bugs de type
-        const receiverId = String(payload.new.receiver_id)
-        const myId = String(user.id)
+    // REALTIME (Filtrage manuel pour robustesse)
+    const channel = supabase.channel('dashboard-final-orbit')
+    channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+        if (String(payload.new.receiver_id) !== String(user.id)) return 
+        
         const senderId = String(payload.new.sender_id)
+        if (activeChatRef.current === senderId) return 
 
-        console.log(`📨 Message reçu de ${senderId}. Destinataire: ${receiverId}`)
-
-        // 2. Comparaison
-        if (receiverId !== myId) {
-            console.log(`❌ Ignoré : Ce message est pour ${receiverId}, pas pour moi (${myId})`)
-            return 
-        }
-
-        // 3. Vérification Chat Ouvert
-        const currentChat = activeChatRef.current ? String(activeChatRef.current) : null
-        if (currentChat === senderId) {
-            console.log("👀 Ignoré : Le chat est déjà ouvert avec cette personne.")
-            return 
-        }
-
-        console.log("✅ VALIDÉ : +1 Notification ajoutée pour", senderId)
-
-        // 4. Mise à jour de l'état
-        setUnreadCounts(prev => {
-            const newCount = (prev[senderId] || 0) + 1
-            console.log("📊 Nouveau compteur pour", senderId, ":", newCount)
-            return {
-                ...prev,
-                [senderId]: newCount
-            }
-        })
+        setUnreadCounts(prev => ({
+            ...prev,
+            [senderId]: (prev[senderId] || 0) + 1
+        }))
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
         if (payload.eventType === 'DELETE') {
@@ -171,25 +135,17 @@ export default function Dashboard() {
                 return isRel ? { ...m, connection: payload.new } : m
              }))
         }
-    })
-    .subscribe((status) => {
-        console.log("📡 Statut Realtime:", status)
-    })
+    }).subscribe()
 
-    return () => { 
-        console.log("🔌 Déconnexion Realtime")
-        supabase.removeChannel(channel) 
-    }
+    return () => { supabase.removeChannel(channel) }
   }, [user, myProfile, authLoading])
 
-  // --- UI HANDLERS ---
   const handleUserSelect = (targetUser) => {
     setShowMobileList(false)
     setSelectedUser(targetUser)
     
-    if (unreadCounts[targetUser.id] > 0) {
-        markAsRead(targetUser.id)
-    }
+    // NOTE : On n'appelle PAS markAsRead ici.
+    // La notif persiste jusqu'à l'ouverture du chat (handleChatStatusChange).
 
     if (window.innerWidth < 768) {
         setIsSidebarVisible(false)
@@ -216,15 +172,7 @@ export default function Dashboard() {
     return filtered
   }, [matches, showFriends, matchRange, isOppositeMode, searchQuery])
 
-  // Optimisation performance (150 max pour la vue graphique)
-  const constellationMatches = useMemo(() => processedMatches.slice(0, 150), [processedMatches])
-
-  if (authLoading || loadingMatches) return (
-    <div className="min-h-screen bg-philo-dark flex flex-col gap-4 items-center justify-center text-white p-4">
-        <div className="w-16 h-16 border-4 border-philo-primary border-t-transparent rounded-full animate-spin"></div>
-        <p className="animate-pulse text-xl font-bold">Chargement de la galaxie...</p>
-    </div>
-  )
+  if (authLoading || loadingMatches) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white p-4"><p className="animate-pulse">Chargement...</p></div>
 
   const SearchBar = () => (
       <div className="px-4 pb-4">
@@ -240,12 +188,10 @@ export default function Dashboard() {
     <div className="h-screen bg-philo-dark text-white p-4 relative overflow-hidden flex flex-col">
       <div className="flex justify-between items-center z-30 w-full max-w-full mx-auto py-2 px-4 md:px-10 shrink-0 relative">
         <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
-        
         <div className="absolute left-1/2 -translate-x-1/2 flex items-center bg-slate-800 rounded-full p-1 border border-white/10 shadow-lg">
             <button onClick={() => setIs3D(false)} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all z-10 ${!is3D ? 'text-white' : 'text-gray-400'}`}>2D {!is3D && <motion.div layoutId="activeTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}</button>
             <button onClick={() => setIs3D(true)} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all z-10 ${is3D ? 'text-white' : 'text-gray-400'}`}>3D {is3D && <motion.div layoutId="activeTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}</button>
         </div>
-
         <div className="flex gap-2 items-center">
           <button onClick={() => navigate('/profile')} className="rounded-full w-10 h-10 overflow-hidden border border-white/20">
              {myProfile?.avatar_public ? <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover" /> : <UserCircle size={38} className="text-gray-300 p-1" />}
@@ -281,9 +227,11 @@ export default function Dashboard() {
 
           <div className={`flex-1 relative overflow-hidden w-full h-full transition-all duration-300 ease-in-out ${isLeftSidebarOpen ? 'md:pl-64' : 'md:pl-0'} ${isRightSidebarOpen ? 'md:pr-80 lg:pr-96' : 'md:pr-0'}`}>
              {is3D ? (
-                <Constellation3D matches={constellationMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id}/>
+                // 3D reçoit TOUT LE MONDE aussi (attention performance si > 200 nodes)
+                <Constellation3D matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id}/>
              ) : (
-                <ConstellationView matches={constellationMatches} myProfile={myProfile} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id}/>
+                // 2D reçoit TOUT LE MONDE
+                <ConstellationView matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id}/>
              )}
           </div>
           
@@ -316,13 +264,7 @@ export default function Dashboard() {
           {(selectedUser && isSidebarVisible) && (
               <>
                 <div className="fixed inset-0 bg-black/60 z-50" onClick={handleCloseProfile} />
-                <UserProfileSidebar 
-                    userId={selectedUser.id} 
-                    similarity={selectedUser.score} 
-                    unreadCount={unreadCounts[selectedUser.id] || 0}
-                    onClose={handleCloseProfile}
-                    onChatStatusChange={handleChatStatusChange} 
-                />
+                <UserProfileSidebar userId={selectedUser.id} similarity={selectedUser.score} unreadCount={unreadCounts[selectedUser.id] || 0} onClose={handleCloseProfile} onChatStatusChange={handleChatStatusChange} />
               </>
           )}
       </AnimatePresence>
