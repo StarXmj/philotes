@@ -1,11 +1,10 @@
-// src/pages/Dashboard.jsx
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { AnimatePresence, motion } from 'framer-motion'
 import { UserCircle, LogOut, Filter, X, List, ChevronLeft, ChevronRight, PanelLeftOpen, PanelRightOpen, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { useNotifications } from '../hooks/useNotifications' // <--- IMPORT DU HOOK
+import { useNotifications } from '../hooks/useNotifications' // <--- Le Hook réparé
 
 import ConstellationView from '../components/dashboard/ConstellationView'
 import Constellation3D from '../components/dashboard/Constellation3D'
@@ -17,41 +16,38 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const { user, profile: myProfile, loading: authLoading } = useAuth()
   
-  // --- 1. SOURCE DE VÉRITÉ UNIQUE ---
-  const notifications = useNotifications()
-
-  // On prépare l'objet simple { userId: count } pour les vues
-  const unreadCounts = useMemo(() => {
-    const counts = {}
-    if (notifications) {
-      Object.entries(notifications).forEach(([id, data]) => {
-        if (data.unreadCount > 0) counts[id] = data.unreadCount
-      })
-    }
-    return counts
-  }, [notifications])
+  // --- CORRECTION 1 : On passe 'user' et on récupère direct les bonnes infos ---
+  const { unreadCounts, markAsRead } = useNotifications(user)
 
   const [matches, setMatches] = useState([])
   const [loadingMatches, setLoadingMatches] = useState(true)
   
-  // --- ÉTATS UI ---
+  // États UI
   const [selectedUser, setSelectedUser] = useState(null)
   const [isSidebarVisible, setIsSidebarVisible] = useState(false)
   const [is3D, setIs3D] = useState(false) 
 
-  // --- FILTRES ---
+  // Filtres
   const [showFriends, setShowFriends] = useState(true)
   const [matchRange, setMatchRange] = useState([0, 100])
   const [isOppositeMode, setIsOppositeMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
-  // --- RESPONSIVE ---
+  // Responsive
   const [showMobileFilters, setShowMobileFilters] = useState(false)
   const [showMobileList, setShowMobileList] = useState(false)
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
-  // 1. CHARGEMENT DES DONNÉES
+  // --- GESTION DU CHAT ---
+  const handleChatStatusChange = useCallback((userId, isChatting) => {
+    if (isChatting) {
+        // Marquer comme lu via le hook quand le chat s'ouvre
+        markAsRead(userId)
+    }
+  }, [markAsRead])
+
+  // CHARGEMENT DES DONNÉES
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
@@ -60,13 +56,11 @@ export default function Dashboard() {
       try {
           if (!myProfile.embedding) { setLoadingMatches(false); return }
 
-          // 1. Matchs RPC
-          const { data: matchedUsers, error: rpcError } = await supabase.rpc('find_best_matches', {
-            p_embedding: myProfile.embedding,
-            p_match_threshold: 0, 
-            p_gender_filter: null,
-            p_my_id: user.id,
-            p_my_domaine: myProfile.domaine || '' 
+          // 1. Matchs RPC (500 profils)
+          const { data: matchedUsers, error: rpcError } = await supabase.rpc('match_students', {
+            query_embedding: myProfile.embedding,
+            match_threshold: -1, 
+            match_count: 500
           })
           if (rpcError) throw rpcError
 
@@ -87,8 +81,9 @@ export default function Dashboard() {
                 )
                 return { 
                     ...match, 
-                    score: match.final_score || match.similarity,
-                    score_global: match.score_global,             
+                    score: match.similarity, 
+                    // Fallback sur similarity si score_global n'existe pas
+                    score_global: match.score_global ?? (match.similarity * 100),             
                     connection: conn || null 
                 }
               })
@@ -102,7 +97,7 @@ export default function Dashboard() {
     }
     loadData()
 
-    // SETUP REALTIME (CONNEXIONS SEULEMENT - Les messages sont gérés par le hook)
+    // REALTIME (Connexions seulement, les messages sont gérés par le hook useNotifications)
     const channel = supabase.channel('dashboard-connections')
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
         if (payload.eventType === 'DELETE') {
@@ -125,7 +120,6 @@ export default function Dashboard() {
   const handleUserSelect = (targetUser) => {
     setShowMobileList(false)
     setSelectedUser(targetUser)
-    
     if (window.innerWidth < 768) {
         setIsSidebarVisible(false)
         setTimeout(() => setIsSidebarVisible(true), 1500)
@@ -152,7 +146,7 @@ export default function Dashboard() {
     if (searchQuery.trim() !== '') {
         filtered = filtered.filter(m => m.pseudo?.toLowerCase().includes(searchQuery.toLowerCase()))
     }
-    filtered.sort((a, b) => isOppositeMode ? a.score - b.score : b.score - a.score)
+    filtered.sort((a, b) => isOppositeMode ? a.score_global - b.score_global : b.score_global - a.score_global)
     return filtered
   }, [matches, showFriends, matchRange, isOppositeMode, searchQuery])
 
@@ -202,7 +196,15 @@ export default function Dashboard() {
                     <button onClick={() => setIsRightSidebarOpen(false)} className="p-1 hover:bg-white/10 rounded text-gray-400 hover:text-white transition"><ChevronRight size={18}/></button>
                 </div>
                 <SearchBar />
-                <div className="flex-1 overflow-hidden"><ListView matches={processedMatches} onSelectUser={handleUserSelect} /></div>
+                <div className="flex-1 overflow-hidden">
+                    {/* --- CORRECTION 2 : On passe les props à la liste pour qu'elle affiche les notifs --- */}
+                    <ListView 
+                        matches={processedMatches} 
+                        onSelectUser={handleUserSelect}
+                        unreadCounts={unreadCounts} 
+                        myId={user?.id}
+                    />
+                </div>
              </div>
           </motion.div>
 
@@ -234,7 +236,10 @@ export default function Dashboard() {
                         <button onClick={() => setShowMobileList(false)}><X size={24}/></button>
                     </div>
                     <div className="pt-4"><SearchBar /></div>
-                    <div className="flex-1 overflow-hidden"><ListView matches={processedMatches} onSelectUser={handleUserSelect}/></div>
+                    <div className="flex-1 overflow-hidden">
+                        {/* --- CORRECTION 3 : Mobile aussi --- */}
+                        <ListView matches={processedMatches} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id}/>
+                    </div>
                 </motion.div>
             </motion.div>
           )}
@@ -247,9 +252,9 @@ export default function Dashboard() {
                 <UserProfileSidebar 
                     userId={selectedUser.id} 
                     similarity={selectedUser.score} 
-                    // ON PASSE LE COUNT GLOBAL ICI
-                    unreadCount={unreadCounts[selectedUser.id] || 0} 
+                    unreadCount={unreadCounts[selectedUser.id] || 0}
                     onClose={handleCloseProfile}
+                    onChatStatusChange={handleChatStatusChange} 
                 />
               </>
           )}
