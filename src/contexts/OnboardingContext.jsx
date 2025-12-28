@@ -202,7 +202,7 @@ export const OnboardingProvider = ({ children }) => {
               dimensions: dimensionScores, 
               
               avatar_public: avatarPublic, avatar_prive: photoUrl,
-              tags: [] 
+              //tags: [] 
           }
           
           const { error } = await supabase.from('profiles').upsert(updates)
