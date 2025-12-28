@@ -19,6 +19,23 @@ import ListView from '../components/dashboard/ListView'
 import UserProfileSidebar from '../components/dashboard/UserProfileSidebar'
 import ChatInterface from '../components/chat/ChatInterface'
 
+// Fix Recherche : Défini à l'extérieur pour éviter la perte de focus
+const SearchBar = ({ searchQuery, setSearchQuery }) => (
+    <div className="px-4 pb-4">
+        <div className="relative group">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+          <input 
+            type="text" 
+            value={searchQuery} 
+            onChange={(e) => setSearchQuery(e.target.value)} 
+            placeholder="Chercher..." 
+            className="w-full bg-slate-800/50 border border-white/10 rounded-xl pl-10 pr-4 py-2 text-sm text-white focus:outline-none focus:border-philo-primary transition-colors"
+          />
+          {searchQuery && (<button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500"><X size={14} /></button>)}
+        </div>
+    </div>
+)
+
 export default function Dashboard() {
   const navigate = useNavigate()
   const { user, profile: myProfile, loading: authLoading } = useAuth()
@@ -154,7 +171,7 @@ export default function Dashboard() {
       }
       setMobileTab('constellation') 
       setSelectedUser(targetUser)
-      // FIX: On utilise 'xl' (1280px) comme pivot mobile/desktop
+      // FIX : Seulement si < 1280px (XL), on cache la sidebar mobile
       if (window.innerWidth < 1280) { 
           setIsSidebarVisible(false); setTimeout(() => setIsSidebarVisible(true), 150) 
       } else { 
@@ -165,16 +182,6 @@ export default function Dashboard() {
 
   if (authLoading || loadingMatches) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white"><p className="animate-pulse">Chargement...</p></div>
 
-  const SearchBar = () => (
-      <div className="px-4 pb-4">
-          <div className="relative group">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
-            <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Chercher..." className="w-full bg-slate-800/50 border border-white/10 rounded-xl pl-10 pr-4 py-2 text-sm text-white"/>
-            {searchQuery && (<button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500"><X size={14} /></button>)}
-          </div>
-      </div>
-  )
-
   return (
     <div className="h-screen bg-philo-dark text-white relative overflow-hidden flex flex-col">
       
@@ -182,12 +189,13 @@ export default function Dashboard() {
       <div className="flex justify-between items-center z-30 w-full max-w-full mx-auto py-2 px-4 xl:px-10 shrink-0 relative bg-slate-900/50 xl:bg-transparent backdrop-blur-sm xl:backdrop-blur-none border-b border-white/5 xl:border-none">
         <h1 className="text-xl xl:text-2xl font-bold hidden xs:block">Philotès<span className="text-philo-primary">.</span></h1>
         
-        {/* Switch Vibes/Profil - Positionné en haut, mais pas trop collé */}
+        {/* Switch Vibes/Profil - Positionnement */}
         {!['filters', 'chats'].includes(mobileTab) && !isChatPage && (
             <div className={`absolute top-0 flex items-center bg-slate-800 rounded-full p-1 border border-white/10 shadow-lg gap-1 transition-all duration-300 z-50 
+                left-1/2 -translate-x-1/2 
                 ${mobileTab === 'list' 
-                    ? 'right-4 mt-2 xl:left-1/2 xl:right-auto xl:mt-0 xl:-translate-x-1/2' 
-                    : 'left-1/2 mt-16 -translate-x-1/2 xl:mt-0' // mt-16 = bien descendu
+                    ? 'mt-4 xl:mt-0'  
+                    : 'mt-16 xl:mt-0' 
                 }
             `}>
                 <button onClick={() => setScoreMode('VIBES')} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all z-10 flex items-center gap-2 ${scoreMode === 'VIBES' ? 'text-white' : 'text-gray-400'}`}>
@@ -201,27 +209,21 @@ export default function Dashboard() {
             </div>
         )}
 
-        {/* GROUPE DROITE : Toujours visible maintenant (plus de hidden xl:flex) */}
-        <div className="flex gap-2 items-center ml-auto">
-            {/* Bouton Chat */}
+        {/* GROUPE DROITE (Chat, 3D, Profil) - Uniquement XL (Desktop) */}
+        <div className="hidden xl:flex gap-2 items-center ml-auto">
             <button 
                 onClick={toggleDesktopChatMode} 
-                // Visible partout
                 className={`relative p-2 rounded-full transition-all border ${isChatPage ? 'bg-philo-primary text-white border-philo-primary' : 'bg-white/10 text-gray-300 border-white/10 hover:bg-white/20'}`}
                 title="Mes Messages"
             >
                 {isChatPage ? <Globe size={20}/> : <MessageCircle size={20} />}
                 {!isChatPage && totalUnread > 0 && <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm animate-pulse">{totalUnread > 9 ? '9+' : totalUnread}</span>}
             </button>
-            
-            {/* Switch 2D/3D - Visible partout sauf si page chat */}
             {!isChatPage && (
                 <button onClick={() => setIs3D(!is3D)} className="p-2 bg-white/10 rounded-full text-xs font-bold w-10 h-10 flex items-center justify-center border border-white/10">
                     {is3D ? "2D" : "3D"}
                 </button>
             )}
-
-            {/* Profil - Visible partout */}
             <button onClick={() => navigate('/profile')} className="rounded-full w-10 h-10 overflow-hidden border border-white/20">
                 {myProfile?.avatar_public ? <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover" /> : <UserCircle size={38} className="text-gray-300 p-1" />}
             </button>
@@ -251,7 +253,8 @@ export default function Dashboard() {
                     </h3>
                     <button onClick={() => setIsRightSidebarOpen(false)}><ChevronRight size={18}/></button>
                 </div>
-                <SearchBar />
+                {/* SearchBar Desktop */}
+                <SearchBar searchQuery={searchQuery} setSearchQuery={setSearchQuery} />
                 <div className="flex-1 overflow-hidden">
                     <ListView matches={processedMatches} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
                 </div>
@@ -261,13 +264,19 @@ export default function Dashboard() {
           {!isLeftSidebarOpen && !isChatPage && (<motion.button initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsLeftSidebarOpen(true)} className="hidden xl:flex absolute left-4 top-4 z-30 p-2 bg-slate-800/80 rounded-lg"><PanelLeftOpen size={20}/></motion.button>)}
           {!isRightSidebarOpen && (<motion.button initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsRightSidebarOpen(true)} className="hidden xl:flex absolute right-4 top-4 z-30 p-2 bg-slate-800/80 rounded-lg"><PanelRightOpen size={20}/></motion.button>)}
 
-          {/* VUE CENTRALE - FIX : Suppression de toutes les marges 'lg:' pour éviter le bug 1024px */}
-          <div className={`flex-1 relative overflow-hidden w-full h-full transition-all duration-300 ease-in-out ${isLeftSidebarOpen && !isChatPage ? 'xl:pl-64' : 'xl:pl-0'} ${isRightSidebarOpen ? 'xl:pr-80 lg:pr-96' : 'xl:pr-0'}`.replace('lg:pr-96', 'xl:pr-96')}>
+          {/* VUE CENTRALE - CORRECTIF ICI : On supprime 'lg:pr-96' qui causait le carré vide à 1024px */}
+          <div className={`flex-1 relative overflow-hidden w-full h-full transition-all duration-300 ease-in-out ${isLeftSidebarOpen && !isChatPage ? 'xl:pl-64' : 'xl:pl-0'} ${isRightSidebarOpen ? 'xl:pr-96' : 'xl:pr-0'}`}>
              
              {/* MODE MOBILE / TABLETTE (< 1280px) */}
              <div className="block xl:hidden h-full w-full">
                 {mobileTab === 'constellation' && (
                   <div className="w-full h-full relative">
+                    <button 
+                        onClick={() => setIs3D(!is3D)} 
+                        className="absolute bottom-24 right-4 z-40 px-4 py-2 bg-slate-800/90 border border-white/20 rounded-full text-xs font-bold shadow-xl backdrop-blur-md text-white"
+                    >
+                        {is3D ? "Passer en 2D" : "Passer en 3D"}
+                    </button>
                     {is3D ? (
                         <Constellation3D matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
                     ) : (
@@ -277,11 +286,12 @@ export default function Dashboard() {
                 )}
 
                 {(mobileTab === 'list' || mobileTab === 'chats') && (
-                   <div className="w-full h-full bg-slate-900 p-4 flex flex-col">
+                   <div className="w-full h-full bg-slate-900 p-4 pt-20 flex flex-col">
                       <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
                         {mobileTab === 'chats' ? <><MessageCircle className="text-philo-primary"/> Discussions</> : <><List/> Liste Univers</>}
                       </h2>
-                      <SearchBar />
+                      {/* SearchBar Mobile (Stable) */}
+                      <SearchBar searchQuery={searchQuery} setSearchQuery={setSearchQuery} />
                       <div className="flex-1 overflow-hidden mt-2">
                           <ListView matches={processedMatches} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
                       </div>
@@ -296,27 +306,16 @@ export default function Dashboard() {
                 )}
              </div>
 
-             {/* MODE DESKTOP (>= 1280px) */}
+             {/* MODE DESKTOP */}
              <div className="hidden xl:block h-full w-full bg-slate-900">
                 {isChatPage ? (
                     <div className="w-full h-full flex flex-col items-center justify-center bg-black/20">
                         {activeChatUser ? (
                             <div className="w-full h-full">
-                                <ChatInterface 
-                                    currentUser={user} 
-                                    targetUser={activeChatUser}
-                                    connection={activeChatUser.connection} 
-                                    onBack={() => setActiveChatUser(null)} 
-                                    onCreateConnection={async () => { }} 
-                                />
+                                <ChatInterface currentUser={user} targetUser={activeChatUser} connection={activeChatUser.connection} onBack={() => setActiveChatUser(null)} onCreateConnection={async () => { }} />
                             </div>
                         ) : (
-                            <div className="flex flex-col items-center text-gray-500 gap-4">
-                                <div className="p-6 rounded-full bg-white/5 border border-white/10 animate-pulse">
-                                    <MessageSquare size={48} />
-                                </div>
-                                <p className="text-lg font-medium">Sélectionne une discussion à droite</p>
-                            </div>
+                            <div className="flex flex-col items-center text-gray-500 gap-4"><div className="p-6 rounded-full bg-white/5 border border-white/10 animate-pulse"><MessageSquare size={48} /></div><p className="text-lg font-medium">Sélectionne une discussion à droite</p></div>
                         )}
                     </div>
                 ) : (
