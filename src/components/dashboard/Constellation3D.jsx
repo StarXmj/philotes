@@ -1,27 +1,26 @@
 import { useRef, useMemo, useState, Suspense } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { OrbitControls, Stars, Text, Float, Billboard, useTexture } from '@react-three/drei'
+import { OrbitControls, Stars, Text, Billboard, useTexture } from '@react-three/drei'
 import { EffectComposer, Bloom } from '@react-three/postprocessing'
 import { ZoomIn, ZoomOut, RotateCcw, Move } from 'lucide-react'
 import * as THREE from 'three'
 
-// ... getSafeAvatarUrl ...
 const getSafeAvatarUrl = (prive, publicName) => {
     if (prive) return prive;
-    if (publicName && publicName !== 'null' && publicName !== 'undefined') return `/avatars/${publicName}`;
+    if (publicName && publicName !== 'null') return `/avatars/${publicName}`;
     return '/avatars/avatar1.png';
 }
 
-// Fonction position mise à jour avec SCOREMODE
+// Fonction position AVEC CONVERSION 100%
 const calculateUserPosition = (match, scoreMode) => {
-    const score = scoreMode === 'IA' ? (match.embedding_score || 0) : (match.profile_score || 0)
+    let score = scoreMode === 'VIBES' ? (match.personality_score || 0) : (match.profile_score || 0)
+    if (score <= 1) score *= 100 // <-- FIX ICI
     
-    // Logique de distance basée sur le score choisi
+    // Si score=100 -> dist=5 (près), si score=0 -> dist=35 (loin)
     const radiusDist = 35 - (score / 100) * 30 
     
     const pseudoRandom = (str) => {
-      let hash = 0;
-      if (!str) return 0.5;
+      let hash = 0; if (!str) return 0.5;
       for (let i = 0; i < str.length; i++) hash = (hash << 5) - hash + str.charCodeAt(i);
       return (Math.abs(hash) % 1000) / 1000;
     }
@@ -36,7 +35,6 @@ const calculateUserPosition = (match, scoreMode) => {
     )
 }
 
-// ... Shared Geometries inchangées ...
 const sharedSphereGeo = new THREE.SphereGeometry(0.35, 16, 16)
 const sharedGlowGeo = new THREE.SphereGeometry(0.35 * 1.3, 16, 16)
 const sharedGlowMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.6, side: THREE.BackSide })
@@ -52,7 +50,6 @@ function CameraRig({ selectedUser, zoomAction, setZoomAction, scoreMode }) {
             camera.position.lerp(camTargetPos, 0.05)
             controls.update()
         }
-        // ... zoom logic ...
         if (zoomAction) {
             const step = 20 * delta 
             if (zoomAction === 'in') { const dist = camera.position.distanceTo(controls.target); if (dist > 5) camera.translateZ(-step) }
@@ -75,10 +72,10 @@ function UserSphere({ match, onClick, isSelected, unreadCount, myId, scoreMode }
   const isPendingRequest = match.connection?.status === 'pending' && match.connection?.receiver_id === myId
   const hasUnreadMessages = unreadCount > 0
   
-  // RECUPERATION DU SCORE SELON MODE
-  const score = scoreMode === 'IA' ? (match.embedding_score || 0) : (match.profile_score || 0)
+  // RECUPERATION DU SCORE AVEC CONVERSION
+  let score = scoreMode === 'VIBES' ? (match.personality_score || 0) : (match.profile_score || 0)
+  if (score <= 1) score *= 100 // <-- FIX ICI
 
-  // ... (Couleurs et logiques identiques à 2D) ...
   let baseColor = '#94a3b8'; let glowColor = baseColor; let pulseSpeed = 2
   if (isPendingRequest) { baseColor = '#4ade80'; glowColor = '#4ade80'; pulseSpeed = 8 } 
   else if (hasUnreadMessages) { baseColor = '#ffffff'; glowColor = '#ffffff'; pulseSpeed = 6 } 
@@ -108,7 +105,6 @@ function UserSphere({ match, onClick, isSelected, unreadCount, myId, scoreMode }
           {(hovered || isSelected) && (
             <Billboard position={[0, -0.7, 0]}>
                 <Text fontSize={0.5} color="white" outlineWidth={0.02} outlineColor="#000000" anchorY="top">{match.pseudo || 'Utilisateur'}</Text>
-                {/* AFFICHE LE SCORE DU MODE ACTUEL */}
                 <Text fontSize={0.3} color={glowColor} position={[0, -0.6, 0]} outlineWidth={0.01} outlineColor="#000000" anchorY="top">{Math.round(score)}%</Text>
             </Billboard>
           )}
@@ -116,7 +112,6 @@ function UserSphere({ match, onClick, isSelected, unreadCount, myId, scoreMode }
   )
 }
 
-// ... MyAvatarSphere, OrbitalGuides (inchangés) ...
 function MyAvatarSphere({ profile }) {
   const avatarUrl = getSafeAvatarUrl(profile?.avatar_prive, profile?.avatar_public)
   const texture = useTexture(avatarUrl)

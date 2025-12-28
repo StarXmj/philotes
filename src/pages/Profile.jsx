@@ -1,8 +1,9 @@
+// src/pages/Profile.jsx
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
-import { generateProfileVector } from '../lib/ai' 
-import { useAuth } from '../contexts/AuthContext' // <--- 1. IMPORT ESSENTIEL POUR LA MISE À JOUR GLOBALE
+// SUPPRESSION DE L'IMPORT AI.JS
+import { useAuth } from '../contexts/AuthContext' 
 import { ArrowLeft, Save, GraduationCap, MapPin, User, BrainCircuit, Loader2, Sparkles, Lock, KeyRound, ShieldCheck, AlertCircle, CheckCircle, Image as ImageIcon, Check, Trash2, Eye, EyeOff } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -15,15 +16,11 @@ const AVATARS_LIST = [
 
 export default function Profile() {
   const navigate = useNavigate()
-  
-  // 2. RÉCUPÉRATION DE LA FONCTION DE MISE À JOUR GLOBALE
   const { updateProfile } = useAuth() 
 
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [user, setUser] = useState(null)
   
-  // --- ÉTAT DIRTY (MODIFIÉ) ---
   const [hasChanges, setHasChanges] = useState(false)
 
   // --- ÉTATS ---
@@ -84,7 +81,6 @@ export default function Profile() {
     const loadProfile = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return navigate('/')
-      setUser(user)
 
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
 
@@ -167,12 +163,13 @@ export default function Profile() {
     if (fileName) await supabase.storage.from('profiles').remove([fileName])
   }
 
-  // --- SAUVEGARDE (AVEC RECALCUL VECTORIEL & MISE À JOUR GLOBALE) ---
+  // --- SAUVEGARDE (NETTOYÉE : PLUS D'IA) ---
   const handleSaveProfile = async (e) => {
     e.preventDefault()
     setSaving(true)
 
     try {
+        const { data: { user } } = await supabase.auth.getUser()
         let finalPrivateUrl = currentRealPhotoUrl
         
         // A. Nouvelle photo
@@ -194,31 +191,27 @@ export default function Profile() {
             oldPhotoUrlRef.current = null
         }
 
-        // --- 2. CALCUL DU VECTEUR IA ---
-        const vibesText = myVibes.map(v => v.answer).join(". ")
-        const narrative = `Étudiant en ${selectedEtude} ${selectedTheme}, ${selectedNom}. Campus : ${selectedLieu}. Genre : ${sexe}. Personnalité : ${vibesText}.`
-        
-        const vector = await generateProfileVector(narrative)
-
-        // --- 3. MISE À JOUR SQL ---
+        // --- MISE À JOUR SQL (SANS EMBEDDING) ---
+        // On ne met à jour que les infos "dures".
+        // Le score de matching (Dimensions) n'est pas impacté par ces champs.
+        // Le score de matching (Profil) sera automatiquement recalculé par la fonction SQL à la volée.
         const { error } = await supabase.from('profiles').update({
             pseudo, sexe, type_diplome: selectedEtude, domaine: selectedTheme, 
             annee_etude: selectedAnnee, intitule: selectedNom, parcours: selectedParcours || null, 
-            etudes_lieu: selectedLieu, avatar_public: selectedPublicAvatar, avatar_prive: finalPrivateUrl,
-            embedding: vector 
+            etudes_lieu: selectedLieu, avatar_public: selectedPublicAvatar, avatar_prive: finalPrivateUrl
+            // embedding: vector  <-- SUPPRIMÉ
         }).eq('id', user.id)
 
         if (error) throw error
 
-        // --- 4. MISE À JOUR DU CONTEXTE GLOBAL (Le Fix !) ---
-        // On récupère le profil à jour pour synchroniser toute l'appli
+        // --- MISE À JOUR DU CONTEXTE GLOBAL ---
         const { data: freshProfile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
         if (freshProfile) {
-            updateProfile(freshProfile) // Met à jour le contexte et le localStorage
+            updateProfile(freshProfile)
         }
         
         setHasChanges(false)
-        alert("Profil et Univers IA mis à jour avec succès !")
+        alert("Profil mis à jour avec succès !")
 
     } catch (error) {
         console.error(error)

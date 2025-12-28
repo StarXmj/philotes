@@ -1,8 +1,7 @@
 import { useMemo, useRef, useState, memo } from 'react'
 import { motion } from 'framer-motion'
-import { User, ZoomIn, ZoomOut, RotateCcw, Move } from 'lucide-react'
+import { User, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
 
-// (Composants OrbitalRing et Planet identiques, je ne les répète pas pour gagner de la place mais il faut les garder)
 const OrbitalRing = ({ radius, duration, children, reverse = false }) => (
     <div className="absolute flex items-center justify-center pointer-events-none" style={{ width: radius * 2, height: radius * 2 }}>
        <div className="absolute inset-0 rounded-full border border-white/5" />
@@ -18,14 +17,14 @@ const Planet = ({ angle, radius, duration, reverse = false, children }) => {
     )
 }
 
-// MATCH NODE : Doit recevoir le scoreMode pour afficher le bon %
 const MatchNode = memo(({ match, onClick, unreadCount, myId, scoreMode }) => {
     const isFriend = match.connection?.status === 'accepted'
     const isPendingRequest = match.connection?.status === 'pending' && match.connection?.receiver_id === myId
     const hasUnreadMessages = unreadCount > 0
     
-    // CALCUL DU SCORE ACTIF
-    const rawScore = scoreMode === 'IA' ? (match.embedding_score || 0) : (match.profile_score || 0)
+    // 1. RECUPERATION & NORMALISATION
+    let rawScore = scoreMode === 'VIBES' ? (match.personality_score || 0) : (match.profile_score || 0)
+    if (rawScore <= 1) rawScore *= 100
     const pct = Math.round(rawScore)
     
     let borderColor = "border-white/20"; let shadowClass = ""; let animationClass = ""
@@ -70,9 +69,11 @@ const ConstellationView = ({ matches = [], myProfile, onSelectUser, unreadCounts
   const orbits = useMemo(() => {
     const cat = { orbit1: [], orbit2: [], orbit3: [], orbit4: [], orbit5: [] }
     if (!matches || !Array.isArray(matches)) return cat;
+    
     matches.forEach(m => {
-        // CHOIX DU SCORE POUR LE CLASSEMENT EN ORBITE
-        const rawScore = scoreMode === 'IA' ? (m.embedding_score || 0) : (m.profile_score || 0)
+        // 2. LOGIQUE DE CLASSEMENT EN ORBITE (Avec conversion automatique)
+        let rawScore = scoreMode === 'VIBES' ? (m.personality_score || 0) : (m.profile_score || 0)
+        if (rawScore <= 1) rawScore *= 100 // <--- C'est ça qui manquait
         
         if (m.connection?.status === 'accepted') cat.orbit1.push(m) 
         else if (rawScore >= 85) cat.orbit2.push(m)

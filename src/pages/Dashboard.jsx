@@ -73,14 +73,22 @@ export default function Dashboard() {
       try {
           if (!myProfile.embedding) { setLoadingMatches(false); return }
 
-          // A. Récupération des profils (Large pour tout le monde)
-          const { data: matchedUsers } = await supabase.rpc('match_students', {
-            query_embedding: myProfile.embedding,
+          // --- CORRECTION CRITIQUE (Erreur 400) ---
+          // On s'assure que l'embedding est un Tableau (Array), pas une String.
+          const embeddingArray = typeof myProfile.embedding === 'string' 
+            ? JSON.parse(myProfile.embedding) 
+            : myProfile.embedding
+
+          // A. Récupération des profils via RPC
+          const { data: matchedUsers, error: rpcError } = await supabase.rpc('match_students', {
+            query_embedding: embeddingArray, // On envoie le tableau propre
             match_threshold: -1, 
-            match_count: 1000 // On récupère jusqu'à 1000 profils
+            match_count: 1000
           })
 
-          // B. Connexions
+          if (rpcError) throw rpcError
+
+          // B. Connexions (Doublon supprimé ici)
           const { data: allMyConnections } = await supabase
             .from('connections').select('*')
             .or(`sender_id.eq.${user.id},receiver_id.eq.${user.id}`)
@@ -108,32 +116,32 @@ export default function Dashboard() {
                 return { 
                     ...match, 
                     // Stockage des scores bruts pour le switch dynamique
-                    embedding_score: match.embedding_score || (match.similarity * 100), 
-                    profile_score: match.profile_score || 0,
-                    // Score global par défaut
-                    score_global: (match.similarity * 100).toFixed(0), 
-                    connection: conn || null 
+                    embedding_score: (match.embedding_score * 100), // IA
+    
+    // ICI : On convertit ton nouveau score profil en pourcentage
+    profile_score: (match.profile_score * 100),     
+    
+    score_global: (match.embedding_score * 100).toFixed(0), 
+    connection: conn || null
                 }
               })
             setMatches(matchesWithStatus)
           }
-      } catch (error) { console.error(error) } 
-      finally { setLoadingMatches(false) }
+      } catch (error) { 
+        console.error("Erreur chargement dashboard:", error) 
+      } finally { 
+        setLoadingMatches(false) 
+      }
     }
     loadData()
 
-    // E. REALTIME ROBUSTE (Filtrage manuel)
+    // E. REALTIME ROBUSTE
     const channel = supabase.channel('dashboard-final-fusion')
     
     channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
-        // 1. Filtrage manuel : est-ce pour moi ?
         if (String(payload.new.receiver_id) !== String(user.id)) return 
-        
-        // 2. Est-ce que le chat est ouvert ?
         const senderId = String(payload.new.sender_id)
         if (activeChatRef.current === senderId) return 
-
-        // 3. Mise à jour compteur
         setUnreadCounts(prev => ({ ...prev, [senderId]: (prev[senderId] || 0) + 1 }))
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'connections' }, (payload) => {
@@ -155,9 +163,6 @@ export default function Dashboard() {
   const handleUserSelect = (targetUser) => {
     setShowMobileList(false)
     setSelectedUser(targetUser)
-    
-    // NOTE: On n'efface pas la notif ici, mais dans handleChatStatusChange (ouverture chat)
-    
     if (window.innerWidth < 768) {
         setIsSidebarVisible(false)
         setTimeout(() => setIsSidebarVisible(true), 1500)
@@ -174,7 +179,6 @@ export default function Dashboard() {
     let filtered = matches
     if (!showFriends) filtered = filtered.filter(m => m.connection?.status !== 'accepted')
     
-    // Fonction helper pour récupérer le bon score selon le mode
     const getScore = (m) => scoreMode === 'IA' ? (m.embedding_score || 0) : (m.profile_score || 0)
 
     const [min, max] = matchRange
@@ -186,13 +190,11 @@ export default function Dashboard() {
     
     if (searchQuery.trim() !== '') filtered = filtered.filter(m => m.pseudo?.toLowerCase().includes(searchQuery.toLowerCase()))
     
-    // Tri dynamique selon le mode
     filtered.sort((a, b) => isOppositeMode ? getScore(a) - getScore(b) : getScore(b) - getScore(a))
     
     return filtered
-  }, [matches, showFriends, matchRange, isOppositeMode, searchQuery, scoreMode]) // Ajout scoreMode aux dépendances
+  }, [matches, showFriends, matchRange, isOppositeMode, searchQuery, scoreMode])
 
-  // Pas de slice : on affiche tout le monde
   const constellationMatches = processedMatches
 
   if (authLoading || loadingMatches) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white p-4"><p className="animate-pulse">Chargement...</p></div>
@@ -227,14 +229,13 @@ export default function Dashboard() {
       </div>
 
       <div className="flex-1 flex relative overflow-hidden min-h-0">
-          {/* SIDEBAR GAUCHE (FILTRES) */}
+          {/* SIDEBAR GAUCHE */}
           <motion.div initial={{ x: 0 }} animate={{ x: isLeftSidebarOpen ? 0 : -300 }} className="hidden md:block absolute left-0 top-0 z-20 h-full w-64 border-r border-white/5 bg-philo-dark/50 backdrop-blur-sm">
              <div className="flex justify-between items-center p-4 border-b border-white/10">
                  <h2 className="text-sm font-bold uppercase text-gray-400">Filtres</h2>
                  <button onClick={() => setIsLeftSidebarOpen(false)}><ChevronLeft size={18}/></button>
              </div>
              <div className="overflow-y-auto h-[calc(100%-60px)]">
-                {/* On passe le mode et le setter */}
                 <DashboardFilters 
                     showFriends={showFriends} setShowFriends={setShowFriends} 
                     setMatchRange={setMatchRange} matchRange={matchRange} 
@@ -244,7 +245,7 @@ export default function Dashboard() {
              </div>
           </motion.div>
 
-          {/* SIDEBAR DROITE (LISTE) */}
+          {/* SIDEBAR DROITE */}
           <motion.div initial={{ x: 0 }} animate={{ x: isRightSidebarOpen ? 0 : 450 }} className="hidden md:block absolute right-0 top-0 z-20 h-full w-80 lg:w-96 border-l border-white/10 bg-slate-900/30 backdrop-blur-sm">
              <div className="h-full flex flex-col">
                 <div className="p-4 border-b border-white/10 shrink-0 flex justify-between items-center mb-2">
@@ -253,12 +254,12 @@ export default function Dashboard() {
                 </div>
                 <SearchBar />
                 <div className="flex-1 overflow-hidden">
-                    {/* On passe scoreMode à la liste pour l'affichage correct */}
                     <ListView matches={processedMatches} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
                 </div>
              </div>
           </motion.div>
 
+          {/* BOUTONS TOGGLE SIDEBARS */}
           {!isLeftSidebarOpen && (<motion.button initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsLeftSidebarOpen(true)} className="hidden md:flex absolute left-4 top-4 z-30 p-2 bg-slate-800/80 rounded-lg"><PanelLeftOpen size={20}/></motion.button>)}
           {!isRightSidebarOpen && (<motion.button initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsRightSidebarOpen(true)} className="hidden md:flex absolute right-4 top-4 z-30 p-2 bg-slate-800/80 rounded-lg"><PanelRightOpen size={20}/></motion.button>)}
 
@@ -275,8 +276,30 @@ export default function Dashboard() {
           <div className="md:hidden absolute top-4 right-0 z-20"><button onClick={() => setShowMobileList(true)} className="p-3 bg-slate-800/80 rounded-l-xl"><List size={24} /></button></div>
       </div>
 
-      <AnimatePresence>
-          {showMobileFilters && (<motion.div className="fixed inset-0 z-50 flex"><div className="fixed inset-0 bg-black/60" onClick={() => setShowMobileFilters(false)}/><motion.div className="relative w-3/4 max-w-xs bg-slate-900 p-6 shadow-2xl h-full"><DashboardFilters showFriends={showFriends} setShowFriends={setShowFriends} setMatchRange={setMatchRange} isOppositeMode={isOppositeMode} setIsOppositeMode={setIsOppositeMode} scoreMode={scoreMode} setScoreMode={setScoreMode} /></motion.div></motion.div>)}
+      {/* MODALES MOBILE */}
+     <AnimatePresence>
+          {showMobileFilters && (
+            <motion.div className="fixed inset-0 z-50 flex">
+                <div className="fixed inset-0 bg-black/60" onClick={() => setShowMobileFilters(false)}/>
+                <motion.div className="relative w-3/4 max-w-xs bg-slate-900 p-6 shadow-2xl h-full">
+                    
+                    {/* C'EST ICI QU'IL MANQUAIT 'matchRange' */}
+                    <DashboardFilters 
+                        showFriends={showFriends} 
+                        setShowFriends={setShowFriends} 
+                        
+                        matchRange={matchRange} // <--- AJOUTER CETTE LIGNE
+                        setMatchRange={setMatchRange} 
+                        
+                        isOppositeMode={isOppositeMode} 
+                        setIsOppositeMode={setIsOppositeMode} 
+                        scoreMode={scoreMode} 
+                        setScoreMode={setScoreMode} 
+                    />
+                    
+                </motion.div>
+            </motion.div>
+          )}
       </AnimatePresence>
       <AnimatePresence>
           {showMobileList && (
@@ -296,13 +319,17 @@ export default function Dashboard() {
           )}
       </AnimatePresence>
 
+      {/* SIDEBAR PROFIL UTILISATEUR (CORRIGÉE) */}
       <AnimatePresence>
           {(selectedUser && isSidebarVisible) && (
               <>
                 <div className="fixed inset-0 bg-black/60 z-50" onClick={handleCloseProfile} />
                 <UserProfileSidebar 
-                    userId={selectedUser.id} 
-                    similarity={selectedUser.score} 
+                    userId={selectedUser.id}
+                    // CORRECTION: Passage de l'objet profil complet contenant les scores
+                    initialProfile={selectedUser} 
+                    // CORRECTION: Passage du score dynamique selon le mode (IA ou Profil)
+                    similarity={scoreMode === 'IA' ? selectedUser.embedding_score : selectedUser.profile_score}
                     unreadCount={unreadCounts[selectedUser.id] || 0} 
                     onClose={handleCloseProfile} 
                     onChatStatusChange={handleChatStatusChange} 

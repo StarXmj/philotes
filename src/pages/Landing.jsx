@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react'
+// src/pages/Landing.jsx
+import { useState } from 'react' // Suppression de useEffect car plus utilisé pour le preload
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mail, Lock, CheckCircle, ShieldCheck, Loader2, ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { preloadModel } from '../lib/ai' // <-- IMPORT DU PRELOADER
+// ON A SUPPRIMÉ L'IMPORT DE 'ai.js' ICI
 
 export default function Landing() {
   const navigate = useNavigate()
@@ -15,12 +16,7 @@ export default function Landing() {
   const [error, setError] = useState(null)
   const [msg, setMsg] = useState(null)
 
-  // --- WARM-UP IA ---
-  // Lance le téléchargement du modèle (~30MB) discrètement dès l'arrivée sur la page
-  useEffect(() => {
-    preloadModel()
-  }, [])
-  // ------------------
+  // ON A SUPPRIMÉ LE WARM-UP IA (useEffect) ICI
 
   const getPasswordStrength = (pass) => {
     let score = 0

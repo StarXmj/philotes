@@ -1,43 +1,63 @@
 // src/components/dashboard/UserProfileSidebar.jsx
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { X, Unlink, Sparkles, Lock, MessageCircle, UserPlus, CheckCircle, Clock, ShieldCheck, UserX } from 'lucide-react'
+import { X, Unlink, Sparkles, GraduationCap, MessageCircle, UserPlus, CheckCircle, Clock, ShieldCheck, UserX, HeartHandshake, Lock } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import ChatInterface from '../chat/ChatInterface'
 
-// AJOUT DE onChatStatusChange DANS LES PROPS
-export default function UserProfileSidebar({ userId, onClose, similarity, unreadCount, onChatStatusChange }) {
+export default function UserProfileSidebar({ userId, onClose, similarity, unreadCount, onChatStatusChange, initialProfile, scoreMode }) {
   const [view, setView] = useState('PROFILE')
-  const [profile, setProfile] = useState(null)
+  // On fusionne les infos reçues du parent (qui contiennent les scores et points communs)
+  const [profile, setProfile] = useState(initialProfile || null)
   const [answers, setAnswers] = useState([])
-  const [connection, setConnection] = useState(null)
+  const [connection, setConnection] = useState(initialProfile?.connection || null)
   const [currentUser, setCurrentUser] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!initialProfile)
+
+  // Gestion du pourcentage d'affichage (Gère le cas 0-1 vs 0-100)
+  const displayPercentage = similarity > 1 ? Math.round(similarity) : Math.round(similarity * 100)
 
   // 1. CHARGEMENT
   useEffect(() => {
     const init = async () => {
-      setLoading(true)
+      // Si on n'a pas le profil complet, on charge
+      if (!profile) setLoading(true)
+      
       const { data: { user } } = await supabase.auth.getUser()
       setCurrentUser(user)
 
-      const { data: prof } = await supabase.from('profiles').select('*').eq('id', userId).single()
-      setProfile(prof)
+      // On fetch quand même pour avoir les infos fraîches (bio, etc), 
+      // MAIS on merge avec les scores existants de initialProfile pour ne pas les perdre
+      const { data: fetchedProf } = await supabase.from('profiles').select('*').eq('id', userId).single()
+      
+      if (fetchedProf) {
+        setProfile(prev => ({
+           ...fetchedProf,
+           // On préserve les scores calculés à la volée s'ils étaient présents dans initialProfile
+           personality_score: prev?.personality_score || initialProfile?.personality_score,
+           profile_score: prev?.profile_score || initialProfile?.profile_score,
+           common_points: prev?.common_points || initialProfile?.common_points
+        }))
+      }
 
+      // Récupération des réponses au quiz
       const { data: ans } = await supabase.from('user_answers').select('question_id, questions(text), options(text)').eq('user_id', userId)
       setAnswers(ans || [])
 
-      const { data: conn } = await supabase
-        .from('connections')
-        .select('*')
-        .or(`and(sender_id.eq.${user.id},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${user.id})`)
-        .maybeSingle()
+      // Si la connexion n'était pas passée via initialProfile, on la cherche
+      if (!initialProfile?.connection) {
+          const { data: conn } = await supabase
+            .from('connections')
+            .select('*')
+            .or(`and(sender_id.eq.${user.id},receiver_id.eq.${userId}),and(sender_id.eq.${userId},receiver_id.eq.${user.id})`)
+            .maybeSingle()
+          setConnection(conn)
+      }
       
-      setConnection(conn)
       setLoading(false)
     }
     if (userId) init()
-  }, [userId])
+  }, [userId, initialProfile])
 
   // 2. REALTIME (Connexions)
   useEffect(() => {
@@ -57,11 +77,12 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
     return () => { supabase.removeChannel(channel) }
   }, [userId, currentUser, connection])
 
-  // GESTION DU NETTOYAGE NOTIF (Quand on ferme le profil)
-  const handleClose = () => {
-    if (onChatStatusChange) onChatStatusChange(userId, false) // On dit au Dashboard qu'on ne chatte plus
-    onClose()
-  }
+  // --- HANDLERS ---
+  const handleClose = () => { if (onChatStatusChange) onChatStatusChange(userId, false); onClose() }
+
+  const openChat = () => { setView('CHAT'); if (onChatStatusChange) onChatStatusChange(userId, true) }
+  
+  const handleBackToProfile = () => { setView('PROFILE'); if (onChatStatusChange) onChatStatusChange(userId, false) }
 
   const handleCreateConnection = async (firstMessage) => {
     const tempConn = { status: 'pending', sender_id: currentUser.id, receiver_id: userId }
@@ -72,7 +93,6 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
       .select().single()
     if (connError) throw connError
     
-    // Important: receiver_id ajouté ici aussi pour la cohérence
     await supabase.from('messages').insert({ 
         connection_id: newConn.id, 
         sender_id: currentUser.id, 
@@ -103,22 +123,9 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
       const connId = connection.id
       setConnection(null)
       setView('PROFILE')
-      if (onChatStatusChange) onChatStatusChange(userId, false) // Reset status
+      if (onChatStatusChange) onChatStatusChange(userId, false) 
       await supabase.from('connections').delete().eq('id', connId)
     }
-  }
-
-  // --- LE MOMENT CRITIQUE : OUVERTURE DU CHAT ---
-  const openChat = () => {
-    setView('CHAT')
-    // C'EST ICI QUE LA NOTIF DISPARAÎT !
-    if (onChatStatusChange) onChatStatusChange(userId, true)
-  }
-
-  const handleBackToProfile = () => {
-    setView('PROFILE')
-    // On signale qu'on n'est plus dans le chat (réactive les notifs si nouveau message arrive)
-    if (onChatStatusChange) onChatStatusChange(userId, false)
   }
 
   const isAccepted = connection?.status === 'accepted'
@@ -149,6 +156,7 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
       ) : (
         <div className="flex flex-col h-full overflow-y-auto relative">
           
+          {/* HEADER FIXE */}
           <div className="sticky top-0 bg-slate-900/90 backdrop-blur-md border-b border-white/10 p-4 flex justify-between items-center z-10">
             <div className={`px-2 py-1 rounded-full border flex items-center gap-1.5 text-xs font-bold transition-all duration-300 ${statusBadge.color}`}>
                {statusBadge.icon} {statusBadge.text}
@@ -160,7 +168,6 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
                   <Unlink size={20} />
                 </button>
               )}
-              {/* Utilisation de handleClose au lieu de onClose direct */}
               <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-full transition"><X size={24} /></button>
             </div>
           </div>
@@ -169,25 +176,37 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
             <div className="p-8 text-center text-gray-400">Scan en cours...</div>
           ) : (
             <div className="p-6 space-y-8 pb-32">
+              {/* SECTION IDENTITÉ */}
               <div className="text-center relative">
                 <div className="w-24 h-24 bg-gradient-to-br from-philo-primary to-philo-secondary rounded-full mx-auto flex items-center justify-center mb-3 shadow-lg shadow-purple-500/20 relative">
-                   {/* BADGE VISIBLE SUR L'AVATAR DU PROFIL */}
                    {unreadCount > 0 && (
                      <div className="absolute top-0 right-0 w-6 h-6 bg-red-500 rounded-full border-2 border-slate-900 flex items-center justify-center text-white text-[10px] font-bold animate-bounce z-20">
                        {unreadCount}
                      </div>
                    )}
-                  <span className="text-4xl font-bold text-white">{profile?.pseudo?.substring(0,2).toUpperCase()}</span>
+                   {profile?.avatar_public ? <img src={`/avatars/${profile.avatar_public}`} className="w-full h-full object-cover rounded-full" /> : <span className="text-4xl font-bold text-white">{profile?.pseudo?.substring(0,2).toUpperCase()}</span>}
                 </div>
                 
                 <h3 className="text-2xl font-bold text-white">{profile?.pseudo}</h3>
                 
-                <div className="mt-2 inline-flex items-center gap-1 bg-philo-primary/20 text-philo-primary px-3 py-1 rounded-full text-xs font-bold border border-philo-primary/30">
-                  <Sparkles size={12}/> {Math.round(similarity * 100)}% Compatible
+                {/* WIDGET SCORE & POINTS COMMUNS */}
+                <div className="mt-3 flex flex-wrap justify-center gap-2">
+                    {/* Badge Score */}
+                    <div className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold border ${scoreMode === 'VIBES' ? 'bg-philo-primary/20 text-philo-primary border-philo-primary/30' : 'bg-philo-secondary/20 text-philo-secondary border-philo-secondary/30'}`}>
+                        {scoreMode === 'VIBES' ? <Sparkles size={12}/> : <GraduationCap size={12}/>} 
+                        {displayPercentage}% {scoreMode === 'VIBES' ? 'Vibes' : 'Profil'}
+                    </div>
+
+                    {/* Badge Points Communs */}
+                    {profile?.common_points > 0 && (
+                        <div className="inline-flex items-center gap-1 bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold border border-emerald-500/30">
+                            <HeartHandshake size={12}/> {profile.common_points} Points communs
+                        </div>
+                    )}
                 </div>
 
+                {/* GRILLE INFOS */}
                 <div className="mt-6 grid grid-cols-2 gap-2 text-sm">
-                  {/* Infos (inchangées) */}
                   <div className={`p-3 rounded-xl border border-white/5 transition-colors duration-500 ${isAccepted ? 'bg-white/5' : 'bg-black/40'}`}>
                     <span className="block text-gray-500 text-[10px] uppercase">Campus</span>
                     <div className={!isAccepted ? "blur-sm select-none" : ""}>{profile?.etudes_lieu || "???"}</div>
@@ -207,7 +226,7 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
                 </div>
                 
                 {!isAccepted && (
-                  <div className="absolute top-44 left-0 w-full flex justify-center pointer-events-none">
+                  <div className="mt-4 flex justify-center">
                     <span className="bg-black/80 text-white px-3 py-1 rounded-full text-xs flex items-center gap-1 border border-white/20 shadow-xl">
                       <Lock size={12}/> Créer un lien pour voir
                     </span>
@@ -217,6 +236,7 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
 
               <div className="h-px bg-white/10 w-full" />
 
+              {/* SECTION RÉPONSES */}
               <div className="space-y-4">
                 <h4 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Sa personnalité</h4>
                 {answers.map((item, idx) => (
@@ -234,7 +254,6 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
                      <button onClick={handleSimpleLinkRequest} className="w-full py-3 bg-white/10 hover:bg-white/20 rounded-xl font-bold text-white transition flex items-center justify-center gap-2 border border-white/10">
                       <UserPlus size={20} /> Demander un lien
                     </button>
-                    {/* BOUTON ENVOYER AVEC BADGE */}
                     <button onClick={openChat} className="w-full py-3 bg-gradient-to-r from-philo-primary to-philo-secondary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 shadow-lg shadow-purple-500/20 relative">
                        {unreadCount > 0 && (
                           <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs w-6 h-6 rounded-full flex items-center justify-center border-2 border-slate-900 animate-bounce z-40">
@@ -259,7 +278,6 @@ export default function UserProfileSidebar({ userId, onClose, similarity, unread
                 )}
 
                 {isAccepted && (
-                   /* BOUTON DISCUTER AVEC BADGE */
                    <button onClick={openChat} className="w-full py-3 bg-philo-primary rounded-xl font-bold text-white hover:opacity-90 transition flex items-center justify-center gap-2 relative">
                     {unreadCount > 0 && (
                         <span className="absolute -top-3 -right-2 bg-red-500 text-white text-xs w-6 h-6 rounded-full flex items-center justify-center border-2 border-slate-900 animate-bounce z-40 shadow-lg">
