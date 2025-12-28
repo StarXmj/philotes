@@ -1,3 +1,4 @@
+// src/components/dashboard/ConstellationView.jsx
 import { useMemo, useRef, useState, memo } from 'react'
 import { motion } from 'framer-motion'
 import { User, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
@@ -71,9 +72,8 @@ const ConstellationView = ({ matches = [], myProfile, onSelectUser, unreadCounts
     if (!matches || !Array.isArray(matches)) return cat;
     
     matches.forEach(m => {
-        // 2. LOGIQUE DE CLASSEMENT EN ORBITE (Avec conversion automatique)
         let rawScore = scoreMode === 'VIBES' ? (m.personality_score || 0) : (m.profile_score || 0)
-        if (rawScore <= 1) rawScore *= 100 // <--- C'est ça qui manquait
+        if (rawScore <= 1) rawScore *= 100 
         
         if (m.connection?.status === 'accepted') cat.orbit1.push(m) 
         else if (rawScore >= 85) cat.orbit2.push(m)
@@ -86,7 +86,19 @@ const ConstellationView = ({ matches = [], myProfile, onSelectUser, unreadCounts
 
   return (
     <div ref={containerRef} className="relative w-full h-full bg-slate-900/40 overflow-hidden cursor-grab active:cursor-grabbing group flex items-center justify-center touch-none" onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}>
-        <div className="absolute bottom-6 right-6 z-40 flex flex-col gap-2 bg-slate-800/80 p-2 rounded-xl"><button onClick={() => setZoom(Math.min(zoom + 0.2, 4))} className="p-2 text-white"><ZoomIn size={20}/></button><button onClick={() => setZoom(0.6)} className="p-2 text-white"><RotateCcw size={20}/></button><button onClick={() => setZoom(Math.max(zoom - 0.2, 0.1))} className="p-2 text-white"><ZoomOut size={20}/></button></div>
+        {/* NOUVEAU WIDGET ZOOM (IDENTIQUE À LA 3D) */}
+        <div className="absolute bottom-20 left-6 z-40 flex flex-col gap-3">
+            <button onClick={() => setZoom(prev => Math.min(prev + 0.2, 4))} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+                <ZoomIn size={24}/>
+            </button>
+            <button onClick={() => setZoom(0.6)} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+                <RotateCcw size={24}/>
+            </button>
+            <button onClick={() => setZoom(prev => Math.max(prev - 0.2, 0.1))} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+                <ZoomOut size={24}/>
+            </button>
+        </div>
+
         <motion.div drag dragConstraints={containerRef} whileTap={{ cursor: "grabbing" }} onWheel={handleWheel} animate={{ scale: zoom }} className="flex items-center justify-center origin-center">
             <div className="relative w-[3000px] h-[3000px] flex items-center justify-center flex-shrink-0">
                 <div className="absolute z-20 w-24 h-24 md:w-32 md:h-32 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary p-1 animate-pulse"><div className="w-full h-full rounded-full overflow-hidden border-4 border-slate-900 bg-slate-900">{myProfile?.avatar_public && <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover"/>}</div></div>

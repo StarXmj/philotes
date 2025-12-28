@@ -1,5 +1,6 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react' // Ajout useCallback
+import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query' // <--- 1. AJOUT DE L'IMPORT
 import { supabase } from '../lib/supabaseClient'
 
 const OnboardingContext = createContext({})
@@ -20,6 +21,7 @@ const calculateDimensions = (answers) => {
 export const OnboardingProvider = ({ children }) => {
   const navigate = useNavigate()
   const location = useLocation()
+  const queryClient = useQueryClient() // <--- 2. INITIALISATION DU CLIENT
   
   const [loading, setLoading] = useState(true)
   const [loadingText, setLoadingText] = useState("Connexion...")
@@ -112,8 +114,13 @@ export const OnboardingProvider = ({ children }) => {
           const cleanAnswers = finalRecorded.map(({score_value, dimension, ...rest}) => ({ user_id: user.id, ...rest }))
           await supabase.from('user_answers').delete().eq('user_id', user.id)
           await supabase.from('user_answers').insert(cleanAnswers)
+          
           const dimensionScores = calculateDimensions(finalRecorded)
           await supabase.from('profiles').update({ dimensions: dimensionScores }).eq('id', user.id)
+          
+          // Petit nettoyage ici aussi par sécurité, même si moins critique pour le mode "quiz only"
+          await queryClient.invalidateQueries({ queryKey: ['profile'] })
+          
           navigate('/profile')
       } catch (e) { console.error(e); setLoading(false) }
   }
@@ -154,7 +161,11 @@ export const OnboardingProvider = ({ children }) => {
               await supabase.from('user_answers').insert(cleanAnswers)
           }
 
-          // REDIRECTION VERS /APP (C'est ici que ça se joue)
+          // <--- 3. LE CORRECTIF EST ICI :
+          // On invalide le cache 'profile' pour que useAuth (dans ProtectedRoute)
+          // recharge immédiatement les nouvelles données depuis Supabase.
+          await queryClient.invalidateQueries({ queryKey: ['profile'] })
+
           navigate('/app')
       } catch (e) { 
         console.error(e)
@@ -163,7 +174,6 @@ export const OnboardingProvider = ({ children }) => {
       }
   }
 
-  // CORRECTION BOUCLE INFINIE : On stabilise la fonction avec useCallback
   const updateFormData = useCallback((field, value) => {
     setFormData(prev => ({ ...prev, [field]: value }))
   }, [])

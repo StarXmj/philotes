@@ -11,12 +11,10 @@ const getSafeAvatarUrl = (prive, publicName) => {
     return '/avatars/avatar1.png';
 }
 
-// Fonction position AVEC CONVERSION 100%
 const calculateUserPosition = (match, scoreMode) => {
     let score = scoreMode === 'VIBES' ? (match.personality_score || 0) : (match.profile_score || 0)
-    if (score <= 1) score *= 100 // <-- FIX ICI
+    if (score <= 1) score *= 100 
     
-    // Si score=100 -> dist=5 (près), si score=0 -> dist=35 (loin)
     const radiusDist = 35 - (score / 100) * 30 
     
     const pseudoRandom = (str) => {
@@ -39,27 +37,31 @@ const sharedSphereGeo = new THREE.SphereGeometry(0.35, 16, 16)
 const sharedGlowGeo = new THREE.SphereGeometry(0.35 * 1.3, 16, 16)
 const sharedGlowMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.6, side: THREE.BackSide })
 
-function CameraRig({ selectedUser, zoomAction, setZoomAction, scoreMode }) {
+function CameraRig({ selectedUser, targetDistance, scoreMode }) {
     const { camera, controls } = useThree()
+    const vec = useMemo(() => new THREE.Vector3(), [])
+
     useFrame((state, delta) => {
+        // FIX : Sécurité anti-crash
+        if (!controls) return;
+
         if (selectedUser) {
             const targetPos = calculateUserPosition(selectedUser, scoreMode)
             controls.target.lerp(targetPos, 0.1)
+            
             const direction = targetPos.clone().normalize()
             const camTargetPos = targetPos.clone().add(direction.multiplyScalar(4))
             camera.position.lerp(camTargetPos, 0.05)
-            controls.update()
-        }
-        if (zoomAction) {
-            const step = 20 * delta 
-            if (zoomAction === 'in') { const dist = camera.position.distanceTo(controls.target); if (dist > 5) camera.translateZ(-step) }
-            if (zoomAction === 'out') { const dist = camera.position.distanceTo(controls.target); if (dist < 100) camera.translateZ(step) }
-            if (zoomAction === 'reset') {
-                controls.target.lerp(new THREE.Vector3(0, 0, 0), 0.1)
-                camera.position.lerp(new THREE.Vector3(0, 10, 40), 0.05)
-                if (camera.position.distanceTo(new THREE.Vector3(0, 10, 40)) < 1) setZoomAction(null)
+        } else {
+            const currentDist = camera.position.distanceTo(controls.target)
+            
+            if (Math.abs(currentDist - targetDistance) > 0.1) {
+                vec.subVectors(camera.position, controls.target).normalize()
+                const newPos = controls.target.clone().add(vec.multiplyScalar(targetDistance))
+                camera.position.lerp(newPos, 5 * delta)
             }
         }
+        controls.update()
     })
     return null
 }
@@ -72,9 +74,8 @@ function UserSphere({ match, onClick, isSelected, unreadCount, myId, scoreMode }
   const isPendingRequest = match.connection?.status === 'pending' && match.connection?.receiver_id === myId
   const hasUnreadMessages = unreadCount > 0
   
-  // RECUPERATION DU SCORE AVEC CONVERSION
   let score = scoreMode === 'VIBES' ? (match.personality_score || 0) : (match.profile_score || 0)
-  if (score <= 1) score *= 100 // <-- FIX ICI
+  if (score <= 1) score *= 100 
 
   let baseColor = '#94a3b8'; let glowColor = baseColor; let pulseSpeed = 2
   if (isPendingRequest) { baseColor = '#4ade80'; glowColor = '#4ade80'; pulseSpeed = 8 } 
@@ -136,18 +137,34 @@ function OrbitalGuides() {
 }
 
 export default function Constellation3D({ matches, myProfile, onSelectUser, selectedUser, unreadCounts = {}, myId, scoreMode }) { 
-  const [zoomAction, setZoomAction] = useState(null)
+  const [targetDistance, setTargetDistance] = useState(40)
+
+  const handleZoom = (direction) => {
+      setTargetDistance(prev => {
+          if (direction === 'in') return Math.max(prev - 10, 5)
+          if (direction === 'out') return Math.min(prev + 10, 100)
+          return 40
+      })
+  }
+
   return (
     <div className="w-full h-full bg-slate-900 cursor-move relative group">
-      <div className="absolute bottom-6 right-6 z-40 flex flex-col gap-2 bg-slate-800/90 backdrop-blur-md p-2 rounded-xl border border-white/10 shadow-2xl">
-            <button onMouseDown={() => setZoomAction('in')} onMouseUp={() => setZoomAction(null)} className="p-3 hover:bg-white/10 rounded-lg text-white"><ZoomIn size={24}/></button>
-            <button onClick={() => setZoomAction('reset')} className="p-3 hover:bg-white/10 rounded-lg text-white"><RotateCcw size={24}/></button>
-            <button onMouseDown={() => setZoomAction('out')} onMouseUp={() => setZoomAction(null)} className="p-3 hover:bg-white/10 rounded-lg text-white"><ZoomOut size={24}/></button>
+      <div className="absolute bottom-20 left-6 z-40 flex flex-col gap-3">
+            <button onClick={() => handleZoom('in')} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+                <ZoomIn size={24}/>
+            </button>
+            <button onClick={() => handleZoom('reset')} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+                <RotateCcw size={24}/>
+            </button>
+            <button onClick={() => handleZoom('out')} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+                <ZoomOut size={24}/>
+            </button>
       </div>
+
       <div className="absolute top-4 left-4 z-40 px-3 py-1 bg-black/40 backdrop-blur-sm rounded-full border border-white/5 text-[10px] text-gray-400 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2"><Move size={12}/> Navigation 3D optimisée</div>
       <Canvas dpr={[1, 1.5]} camera={{ position: [0, 10, 40], fov: 50 }} gl={{ powerPreference: "high-performance", antialias: false }} performance={{ min: 0.5 }}>
-        <CameraRig selectedUser={selectedUser} zoomAction={zoomAction} setZoomAction={setZoomAction} scoreMode={scoreMode} />
-        <OrbitControls makeDefault enablePan={true} enableZoom={true} enableRotate={true} autoRotate={!selectedUser && !zoomAction} autoRotateSpeed={0.2} minDistance={3} maxDistance={120} />
+        <CameraRig selectedUser={selectedUser} targetDistance={targetDistance} scoreMode={scoreMode} />
+        <OrbitControls makeDefault enablePan={true} enableZoom={true} enableRotate={true} autoRotate={!selectedUser} autoRotateSpeed={0.2} minDistance={3} maxDistance={120} />
         <Stars radius={200} depth={50} count={5000} factor={4} saturation={0} fade speed={0.5} />
         <ambientLight intensity={0.2} />
         <directionalLight position={[10, 10, 5]} intensity={1} />

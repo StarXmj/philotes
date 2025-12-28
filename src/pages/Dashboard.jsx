@@ -2,7 +2,11 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { AnimatePresence, motion } from 'framer-motion'
-import { UserCircle, LogOut, Filter, List, ChevronLeft, ChevronRight, PanelLeftOpen, PanelRightOpen, Search, X, Sparkles, GraduationCap } from 'lucide-react'
+import { 
+  UserCircle, LogOut, List, ChevronLeft, ChevronRight, 
+  PanelLeftOpen, PanelRightOpen, Search, X, Sparkles, 
+  GraduationCap, MessageCircle, Globe, SlidersHorizontal, User 
+} from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -12,6 +16,7 @@ import Constellation3D from '../components/dashboard/Constellation3D'
 import DashboardFilters from '../components/dashboard/DashboardFilters'
 import ListView from '../components/dashboard/ListView'
 import UserProfileSidebar from '../components/dashboard/UserProfileSidebar'
+import ChatInterface from '../components/chat/ChatInterface'
 
 export default function Dashboard() {
   const navigate = useNavigate()
@@ -27,15 +32,17 @@ export default function Dashboard() {
   
   // États UI
   const [selectedUser, setSelectedUser] = useState(null)
+  const [activeChatUser, setActiveChatUser] = useState(null)
+  
   const [isSidebarVisible, setIsSidebarVisible] = useState(false)
   const [is3D, setIs3D] = useState(false) 
   const [showFriends, setShowFriends] = useState(true)
-  const [onlyFriends, setOnlyFriends] = useState(false) // NOUVEAU
+  const [onlyFriends, setOnlyFriends] = useState(false)
   const [matchRange, setMatchRange] = useState([0, 100])
   const [isOppositeMode, setIsOppositeMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [showMobileFilters, setShowMobileFilters] = useState(false)
-  const [showMobileList, setShowMobileList] = useState(false)
+  
+  const [mobileTab, setMobileTab] = useState('constellation')
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
@@ -50,7 +57,19 @@ export default function Dashboard() {
     else { activeChatRef.current = null }
   }, [markAsRead])
 
-  // --- 3. CHARGEMENT ---
+  const totalUnread = useMemo(() => {
+    return Object.values(unreadCounts).reduce((acc, count) => acc + count, 0)
+  }, [unreadCounts])
+
+  // --- 3. ACTIONS DE LA BARRE DU BAS ---
+  const handleTabConstellation = () => { setMobileTab('constellation'); setOnlyFriends(false); setActiveChatUser(null); }
+  const handleTabList = () => { setMobileTab('list'); setOnlyFriends(false); setSearchQuery(''); setActiveChatUser(null); }
+  const handleTabFilters = () => { setMobileTab('filters'); setActiveChatUser(null); }
+  const handleTabChats = () => { setMobileTab('chats'); setOnlyFriends(true); setShowFriends(true); setSearchQuery(''); setActiveChatUser(null); }
+  const handleTabProfile = () => { navigate('/profile') }
+  const handleOpenChatsDesktop = () => { setOnlyFriends(true); setShowFriends(true); setIsRightSidebarOpen(true); }
+
+  // --- 4. CHARGEMENT ---
   useEffect(() => {
     if (authLoading) return
     if (!user || !myProfile) { setLoadingMatches(false); return }
@@ -121,7 +140,22 @@ export default function Dashboard() {
   }, [matches, showFriends, onlyFriends, matchRange, isOppositeMode, searchQuery, scoreMode])
 
   // --- HANDLERS UI ---
-  const handleUserSelect = (targetUser) => { setShowMobileList(false); setSelectedUser(targetUser); if (window.innerWidth < 768) { setIsSidebarVisible(false); setTimeout(() => setIsSidebarVisible(true), 1500) } else { setIsSidebarVisible(true) } }
+  const handleUserSelect = (targetUser) => { 
+      if (mobileTab === 'chats') {
+          setActiveChatUser(targetUser)
+          markAsRead(targetUser.id)
+          return
+      }
+      setMobileTab('constellation') 
+      setSelectedUser(targetUser)
+      if (window.innerWidth < 768) { 
+          setIsSidebarVisible(false)
+          setTimeout(() => setIsSidebarVisible(true), 150) 
+      } else { 
+          setIsSidebarVisible(true) 
+      } 
+  }
+  
   const handleCloseProfile = () => { setIsSidebarVisible(false); setTimeout(() => setSelectedUser(null), 300) }
   const handleLogout = async () => await supabase.auth.signOut() 
 
@@ -138,36 +172,52 @@ export default function Dashboard() {
   )
 
   return (
-    <div className="h-screen bg-philo-dark text-white p-4 relative overflow-hidden flex flex-col">
-      {/* HEADER */}
-      <div className="flex justify-between items-center z-30 w-full max-w-full mx-auto py-2 px-4 md:px-10 shrink-0 relative">
-        <h1 className="text-2xl font-bold">Philotès<span className="text-philo-primary">.</span></h1>
+    <div className="h-screen bg-philo-dark text-white relative overflow-hidden flex flex-col">
+      
+      {/* --- HEADER --- */}
+      <div className="flex justify-between items-center z-30 w-full max-w-full mx-auto py-2 px-4 md:px-10 shrink-0 relative bg-slate-900/50 md:bg-transparent backdrop-blur-sm md:backdrop-blur-none border-b border-white/5 md:border-none">
+        <h1 className="text-xl md:text-2xl font-bold hidden xs:block">Philotès<span className="text-philo-primary">.</span></h1>
         
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center bg-slate-800 rounded-full p-1 border border-white/10 shadow-lg gap-1">
-            <button onClick={() => setScoreMode('VIBES')} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all z-10 flex items-center gap-2 ${scoreMode === 'VIBES' ? 'text-white' : 'text-gray-400'}`}>
-               <Sparkles size={14}/> Vibes
-               {scoreMode === 'VIBES' && <motion.div layoutId="scoreTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}
-            </button>
-            <button onClick={() => setScoreMode('PROFIL')} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all z-10 flex items-center gap-2 ${scoreMode === 'PROFIL' ? 'text-white' : 'text-gray-400'}`}>
-               <GraduationCap size={14}/> Profil
-               {scoreMode === 'PROFIL' && <motion.div layoutId="scoreTab" className="absolute inset-0 bg-philo-secondary rounded-full -z-10 shadow-lg" />}
-            </button>
-        </div>
+        {/* MODIFICATION ICI : Positionnement Dynamique du Switch 
+            - Si Liste : Droite (right-4) + Normal (mt-2)
+            - Si Constellation : Centre (left-1/2) + Baissé (mt-8)
+            - Sur Desktop (md:) : Toujours centré et normal (mt-0)
+        */}
+        {!['filters', 'chats'].includes(mobileTab) && (
+            <div className={`absolute top-0 flex items-center bg-slate-800 rounded-full p-1 border border-white/10 shadow-lg gap-1 transition-all duration-300 z-50 
+                ${mobileTab === 'list' 
+                    ? 'right-4 mt-2 md:left-1/2 md:right-auto md:mt-0 md:-translate-x-1/2' 
+                    : 'left-1/2 mt-8 -translate-x-1/2 md:mt-0'
+                }
+            `}>
+                <button onClick={() => setScoreMode('VIBES')} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all z-10 flex items-center gap-2 ${scoreMode === 'VIBES' ? 'text-white' : 'text-gray-400'}`}>
+                   <Sparkles size={14}/> Vibes
+                   {scoreMode === 'VIBES' && <motion.div layoutId="scoreTab" className="absolute inset-0 bg-philo-primary rounded-full -z-10 shadow-lg" />}
+                </button>
+                <button onClick={() => setScoreMode('PROFIL')} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all z-10 flex items-center gap-2 ${scoreMode === 'PROFIL' ? 'text-white' : 'text-gray-400'}`}>
+                   <GraduationCap size={14}/> Profil
+                   {scoreMode === 'PROFIL' && <motion.div layoutId="scoreTab" className="absolute inset-0 bg-philo-secondary rounded-full -z-10 shadow-lg" />}
+                </button>
+            </div>
+        )}
 
         <div className="flex gap-2 items-center">
-          {/* Toggle 3D Desktop */}
-          <button onClick={() => setIs3D(!is3D)} className="hidden md:flex p-2 bg-white/10 rounded-full text-xs font-bold w-10 h-10 items-center justify-center border border-white/10">
-              {is3D ? "2D" : "3D"}
-          </button>
-          <button onClick={() => navigate('/profile')} className="rounded-full w-10 h-10 overflow-hidden border border-white/20">
-             {myProfile?.avatar_public ? <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover" /> : <UserCircle size={38} className="text-gray-300 p-1" />}
-          </button>
-          <button onClick={handleLogout} className="p-2 bg-white/10 rounded-full"><LogOut size={20} /></button>
+            <button onClick={handleOpenChatsDesktop} className="hidden md:flex relative p-2 rounded-full transition-all border border-white/10 bg-white/10 text-gray-300 hover:bg-white/20">
+                <MessageCircle size={20} />
+                {totalUnread > 0 && <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm animate-pulse">{totalUnread > 9 ? '9+' : totalUnread}</span>}
+            </button>
+            <button onClick={() => setIs3D(!is3D)} className="hidden md:flex p-2 bg-white/10 rounded-full text-xs font-bold w-10 h-10 items-center justify-center border border-white/10">
+                {is3D ? "2D" : "3D"}
+            </button>
+            <button onClick={() => navigate('/profile')} className="hidden md:block rounded-full w-10 h-10 overflow-hidden border border-white/20">
+                {myProfile?.avatar_public ? <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover" /> : <UserCircle size={38} className="text-gray-300 p-1" />}
+            </button>
+            <button onClick={handleLogout} className="hidden md:flex p-2 bg-white/10 rounded-full"><LogOut size={20} /></button>
         </div>
       </div>
 
-      <div className="flex-1 flex relative overflow-hidden min-h-0">
-          {/* SIDEBAR GAUCHE */}
+      <div className="flex-1 flex relative overflow-hidden min-h-0 pb-[70px] md:pb-0"> 
+          
           <motion.div initial={{ x: 0 }} animate={{ x: isLeftSidebarOpen ? 0 : -300 }} className="hidden md:block absolute left-0 top-0 z-20 h-full w-64 border-r border-white/5 bg-philo-dark/50 backdrop-blur-sm">
              <div className="flex justify-between items-center p-4 border-b border-white/10">
                  <h2 className="text-sm font-bold uppercase text-gray-400">Filtres</h2>
@@ -178,7 +228,6 @@ export default function Dashboard() {
              </div>
           </motion.div>
 
-          {/* SIDEBAR DROITE */}
           <motion.div initial={{ x: 0 }} animate={{ x: isRightSidebarOpen ? 0 : 450 }} className="hidden md:block absolute right-0 top-0 z-20 h-full w-80 lg:w-96 border-l border-white/10 bg-slate-900/30 backdrop-blur-sm">
              <div className="h-full flex flex-col">
                 <div className="p-4 border-b border-white/10 shrink-0 flex justify-between items-center mb-2">
@@ -197,51 +246,107 @@ export default function Dashboard() {
 
           {/* VUE CENTRALE */}
           <div className={`flex-1 relative overflow-hidden w-full h-full transition-all duration-300 ease-in-out ${isLeftSidebarOpen ? 'md:pl-64' : 'md:pl-0'} ${isRightSidebarOpen ? 'md:pr-80 lg:pr-96' : 'md:pr-0'}`}>
-             {is3D ? (
-                <Constellation3D matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
-             ) : (
-                <ConstellationView matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
-             )}
-          </div>
-          
-          {/* CONTROLES MOBILE */}
-          <div className="md:hidden absolute top-4 left-0 z-20">
-              <button onClick={() => setShowMobileFilters(true)} className="p-3 bg-slate-800/80 rounded-r-xl border border-white/10 text-white"><Filter size={24} /></button>
-          </div>
-          {/* GROUPE DROITE MOBILE : 3D + LISTE */}
-          <div className="md:hidden absolute top-4 right-0 z-20 flex gap-2 pr-2">
-              <button onClick={() => setIs3D(!is3D)} className="p-3 bg-slate-800/80 rounded-xl border border-white/10 text-white font-bold text-xs w-12 flex items-center justify-center">{is3D ? "2D" : "3D"}</button>
-              <button onClick={() => setShowMobileList(true)} className="p-3 bg-slate-800/80 rounded-xl border border-white/10 text-white"><List size={24} /></button>
+             
+             {/* MOBILE */}
+             <div className="block md:hidden h-full w-full">
+                {mobileTab === 'constellation' && (
+                  <div className="w-full h-full relative">
+                    <button onClick={() => setIs3D(!is3D)} className="absolute bottom-4 right-4 z-40 px-4 py-2 bg-slate-800/90 border border-white/20 rounded-full text-xs font-bold shadow-xl backdrop-blur-md">
+                        {is3D ? "Passer en 2D" : "Passer en 3D"}
+                    </button>
+                    {is3D ? (
+                        <Constellation3D matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+                    ) : (
+                        <ConstellationView matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+                    )}
+                  </div>
+                )}
+
+                {(mobileTab === 'list' || mobileTab === 'chats') && (
+                   <div className="w-full h-full bg-slate-900 p-4 flex flex-col">
+                      <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
+                        {mobileTab === 'chats' ? <><MessageCircle className="text-philo-primary"/> Discussions</> : <><List/> Liste Univers</>}
+                      </h2>
+                      <SearchBar />
+                      <div className="flex-1 overflow-hidden mt-2">
+                          <ListView matches={processedMatches} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+                      </div>
+                   </div>
+                )}
+
+                {mobileTab === 'filters' && (
+                  <div className="w-full h-full bg-slate-900 p-6 overflow-y-auto">
+                     <h2 className="text-xl font-bold mb-6 flex items-center gap-2"><SlidersHorizontal/> Filtres</h2>
+                     <DashboardFilters showFriends={showFriends} setShowFriends={setShowFriends} onlyFriends={onlyFriends} setOnlyFriends={setOnlyFriends} setMatchRange={setMatchRange} matchRange={matchRange} isOppositeMode={isOppositeMode} setIsOppositeMode={setIsOppositeMode} scoreMode={scoreMode} setScoreMode={setScoreMode} />
+                  </div>
+                )}
+             </div>
+
+             {/* DESKTOP */}
+             <div className="hidden md:block h-full w-full">
+                {is3D ? (
+                    <Constellation3D matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+                ) : (
+                    <ConstellationView matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+                )}
+             </div>
+
           </div>
       </div>
 
-      <AnimatePresence>
-          {showMobileFilters && (<motion.div className="fixed inset-0 z-50 flex"><div className="fixed inset-0 bg-black/60" onClick={() => setShowMobileFilters(false)}/><motion.div className="relative w-3/4 max-w-xs bg-slate-900 p-6 shadow-2xl h-full"><DashboardFilters showFriends={showFriends} setShowFriends={setShowFriends} onlyFriends={onlyFriends} setOnlyFriends={setOnlyFriends} setMatchRange={setMatchRange} matchRange={matchRange} isOppositeMode={isOppositeMode} setIsOppositeMode={setIsOppositeMode} scoreMode={scoreMode} setScoreMode={setScoreMode} /></motion.div></motion.div>)}
-      </AnimatePresence>
-      <AnimatePresence>
-          {showMobileList && (
-            <motion.div className="fixed inset-0 z-50 flex justify-end">
-                <div className="fixed inset-0 bg-black/60" onClick={() => setShowMobileList(false)}/>
-                <motion.div initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} className="relative w-3/4 max-w-md bg-slate-900 flex flex-col shadow-2xl h-full">
-                    <div className="p-4 border-b border-white/10 flex justify-between items-center bg-slate-900/95">
-                        <h2 className="text-xl font-bold flex items-center gap-2"><List size={20}/> Liste ({processedMatches.length})</h2>
-                        <button onClick={() => setShowMobileList(false)}><X size={24}/></button>
-                    </div>
-                    <div className="pt-4"><SearchBar /></div>
-                    <div className="flex-1 overflow-hidden">
-                        <ListView matches={processedMatches} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
-                    </div>
-                </motion.div>
-            </motion.div>
-          )}
-      </AnimatePresence>
+      {/* --- BOTTOM NAVIGATION BAR --- */}
+      <div className="md:hidden fixed bottom-0 left-0 w-full h-[65px] bg-slate-900/95 backdrop-blur-md border-t border-white/10 z-50 flex justify-around items-center px-2 pb-2 safe-area-bottom shadow-[0_-5px_20px_rgba(0,0,0,0.5)]">
+          <button onClick={handleTabConstellation} className={`flex flex-col items-center justify-center p-2 rounded-xl transition-all ${mobileTab === 'constellation' ? 'text-philo-primary' : 'text-gray-400 hover:text-white'}`}>
+             <Globe size={24} strokeWidth={mobileTab === 'constellation' ? 2.5 : 2} />
+             <span className="text-[10px] font-medium mt-1">Univers</span>
+          </button>
+          <button onClick={handleTabList} className={`flex flex-col items-center justify-center p-2 rounded-xl transition-all ${mobileTab === 'list' ? 'text-philo-primary' : 'text-gray-400 hover:text-white'}`}>
+             <List size={24} strokeWidth={mobileTab === 'list' ? 2.5 : 2} />
+             <span className="text-[10px] font-medium mt-1">Liste</span>
+          </button>
+          <button onClick={handleTabFilters} className={`flex flex-col items-center justify-center p-2 rounded-xl transition-all ${mobileTab === 'filters' ? 'text-philo-primary' : 'text-gray-400 hover:text-white'}`}>
+             <SlidersHorizontal size={24} strokeWidth={mobileTab === 'filters' ? 2.5 : 2} />
+             <span className="text-[10px] font-medium mt-1">Filtres</span>
+          </button>
+          <button onClick={handleTabChats} className={`relative flex flex-col items-center justify-center p-2 rounded-xl transition-all ${mobileTab === 'chats' ? 'text-philo-primary' : 'text-gray-400 hover:text-white'}`}>
+             <div className="relative">
+                <MessageCircle size={24} strokeWidth={mobileTab === 'chats' ? 2.5 : 2} />
+                {totalUnread > 0 && <span className="absolute -top-1 -right-1 flex h-3 w-3 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white ring-2 ring-slate-900"></span>}
+             </div>
+             <span className="text-[10px] font-medium mt-1">Chat</span>
+          </button>
+          <button onClick={handleTabProfile} className="flex flex-col items-center justify-center p-2 rounded-xl text-gray-400 hover:text-white">
+             {myProfile?.avatar_public ? (
+                 <img src={`/avatars/${myProfile.avatar_public}`} className="w-6 h-6 rounded-full object-cover border border-gray-400" />
+             ) : (
+                 <User size={24} />
+             )}
+             <span className="text-[10px] font-medium mt-1">Profil</span>
+          </button>
+      </div>
 
+      {/* MODALE PROFIL */}
       <AnimatePresence>
-          {(selectedUser && isSidebarVisible) && (
+          {(selectedUser && isSidebarVisible && !activeChatUser) && (
               <>
                 <div className="fixed inset-0 bg-black/60 z-50" onClick={handleCloseProfile} />
                 <UserProfileSidebar userId={selectedUser.id} initialProfile={selectedUser} similarity={scoreMode === 'VIBES' ? selectedUser.personality_score : selectedUser.profile_score} unreadCount={unreadCounts[selectedUser.id] || 0} onClose={handleCloseProfile} onChatStatusChange={handleChatStatusChange} scoreMode={scoreMode} />
               </>
+          )}
+      </AnimatePresence>
+
+      {/* MODALE CHAT DIRECT */}
+      <AnimatePresence>
+          {activeChatUser && (
+              <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ duration: 0.3 }} className="fixed inset-0 z-[60] bg-slate-900 flex flex-col">
+                  <ChatInterface 
+                      currentUser={user} 
+                      targetUser={activeChatUser}
+                      connection={activeChatUser.connection} 
+                      onBack={() => setActiveChatUser(null)} 
+                      onCreateConnection={async () => { }} 
+                  />
+              </motion.div>
           )}
       </AnimatePresence>
     </div>
