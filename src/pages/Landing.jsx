@@ -1,10 +1,14 @@
-// src/pages/Landing.jsx
-import { useState } from 'react' // Suppression de useEffect car plus utilisé pour le preload
+import { useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Mail, Lock, CheckCircle, ShieldCheck, Loader2, ArrowLeft } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-// ON A SUPPRIMÉ L'IMPORT DE 'ai.js' ICI
+
+// --- CONFIGURATION DES DOMAINES AUTORISÉS ---
+const ALLOWED_DOMAINS = [
+  '@etud.univ-pau.fr',
+  '@gmail.com'
+]
 
 export default function Landing() {
   const navigate = useNavigate()
@@ -15,8 +19,6 @@ export default function Landing() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [msg, setMsg] = useState(null)
-
-  // ON A SUPPRIMÉ LE WARM-UP IA (useEffect) ICI
 
   const getPasswordStrength = (pass) => {
     let score = 0
@@ -43,6 +45,11 @@ export default function Landing() {
     return 'Fort 💪'
   }
 
+  // Fonction helper pour vérifier le domaine
+  const isEmailAllowed = (email) => {
+    return ALLOWED_DOMAINS.some(domain => email.endsWith(domain))
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
@@ -50,12 +57,13 @@ export default function Landing() {
     setMsg(null)
 
     try {
+      // Vérification commune du domaine (pour signup et forgot)
+      if (mode !== 'login' && !isEmailAllowed(email)) {
+         throw new Error(`Veuillez utiliser une adresse universitaire valide (${ALLOWED_DOMAINS.join(', ')})`)
+      }
+
       // 1. CAS : MOT DE PASSE OUBLIÉ
       if (mode === 'forgot') {
-        if (!email.endsWith('@etud.univ-pau.fr')) {
-            throw new Error("Veuillez utiliser votre adresse étudiante (@etud.univ-pau.fr)")
-        }
-
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
           redirectTo: window.location.origin + '/update-password', 
         })
@@ -68,7 +76,8 @@ export default function Landing() {
       else if (mode === 'signup') {
         if (password !== confirmPassword) throw new Error("Les mots de passe ne correspondent pas.")
         if (strength < 2) throw new Error("Le mot de passe est trop court (6 caractères min).")
-        if (!email.endsWith('@etud.univ-pau.fr')) throw new Error("Inscription réservée aux adresses @etud.univ-pau.fr")
+        
+        // La vérification du domaine est déjà faite au début du try
 
         const { data, error } = await supabase.auth.signUp({
           email: email,
