@@ -169,6 +169,11 @@ export const OnboardingProvider = ({ children }) => {
   }
 
   // --- CAS 2 : PREMIER ONBOARDING (Depuis Landing) ---
+  // src/contexts/OnboardingContext.jsx
+
+// ... (début du fichier inchangé)
+
+  // --- CAS 2 : PREMIER ONBOARDING (Depuis Landing) ---
   const submitFullProfile = async () => {
       setLoading(true); setLoadingText("Création de ton univers...")
       try {
@@ -187,13 +192,14 @@ export const OnboardingProvider = ({ children }) => {
 
           // 2. INSERTION/UPDATE DU PROFIL COMPLET
           const updates = {
-              id: user.id, email: user.email,
+              id: user.id, 
+              // email: user.email,  <-- LIGNE SUPPRIMÉE (L'email est géré par Supabase Auth)
               pseudo: formData.pseudo, sexe: formData.sexe, date_naissance: formData.birthDate,
               type_diplome: formData.etude, domaine: formData.theme, 
               annee_etude: formData.etude.includes('Doctora') ? null : formData.annee,
               intitule: formData.nom, parcours: formData.parcours || null, etudes_lieu: formData.lieu,
               
-              dimensions: dimensionScores, // <--- Injection du "Vecteur"
+              dimensions: dimensionScores, 
               
               avatar_public: avatarPublic, avatar_prive: photoUrl,
               tags: [] 
@@ -209,9 +215,11 @@ export const OnboardingProvider = ({ children }) => {
               await supabase.from('user_answers').insert(cleanAnswers)
           }
 
-          navigate('/app') // Direction Dashboard
+          navigate('/app') 
       } catch (e) { alert(e.message); setLoading(false) }
   }
+
+// ... (reste du fichier inchangé)
 
   const updateFormData = (field, value) => setFormData(prev => ({ ...prev, [field]: value }))
 
