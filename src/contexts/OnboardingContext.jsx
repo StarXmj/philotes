@@ -6,22 +6,18 @@ const OnboardingContext = createContext({})
 
 export const useOnboarding = () => useContext(OnboardingContext)
 
-// --- MOTEUR DE CALCUL DES DIMENSIONS (Le Cœur du Système) ---
+// --- MOTEUR DE CALCUL DES DIMENSIONS ---
 const calculateDimensions = (answers) => {
-  // On transforme les réponses en un objet de scores cumulés
-  // Ex: { social: 120, serieux: 40, ... }
   const scores = answers.reduce((acc, curr) => {
-    // Sécurité : On ignore les options sans dimension ou valeur
+    // Sécurité stricte
     if (!curr.dimension || curr.score_value === undefined || curr.score_value === null) return acc;
 
-    // IMPORTANT : On force en minuscule pour correspondre à ton SQL (social vs Social)
     const dimKey = curr.dimension.toLowerCase().trim();
 
     if (!acc[dimKey]) {
       acc[dimKey] = 0;
     }
 
-    // On additionne les scores
     acc[dimKey] += parseInt(curr.score_value, 10);
     return acc;
   }, {}); 
@@ -36,7 +32,6 @@ export const OnboardingProvider = ({ children }) => {
   const [loading, setLoading] = useState(true)
   const [loadingText, setLoadingText] = useState("Connexion...")
   
-  // Modes : 'edit' = Modification Profil, 'quiz_only' = Refaire le test depuis Profil
   const isEditMode = location.state?.mode === 'edit'
   const isQuizOnly = location.state?.mode === 'quiz_only'
 
@@ -64,7 +59,6 @@ export const OnboardingProvider = ({ children }) => {
         
         const [formationsRes, questionsRes] = await Promise.all([
            supabase.from('formations').select('*'),
-           // IMPORTANT : On récupère bien 'dimension' et 'score_value' pour le calcul
            supabase.from('questions')
              .select(`id, text, order, depends_on_option_id, options ( id, text, dimension, score_value )`)
              .order('order', { ascending: true })
@@ -77,7 +71,6 @@ export const OnboardingProvider = ({ children }) => {
           setCurrentQuestion(questionsRes.data.find(q => q.depends_on_option_id === null))
         }
 
-        // Pré-remplissage si mode édition
         if ((isEditMode || isQuizOnly) && user) {
           const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
           if (profile) {
@@ -105,7 +98,6 @@ export const OnboardingProvider = ({ children }) => {
     const newHistory = [...questionHistory, currentQuestion]
     const newAnswersText = [...answersText, option.text]
     
-    // Capture de la réponse avec ses métadonnées pour le calcul final
     const newRecorded = [...recordedAnswers, { 
       question_id: currentQuestion.id, 
       option_id: option.id,
@@ -127,7 +119,6 @@ export const OnboardingProvider = ({ children }) => {
 
       if (next) setCurrentQuestion(next)
       else {
-        // FIN DU QUIZ : On branche vers la bonne sauvegarde
         if (isQuizOnly) finalizeQuizOnly(newRecorded, newAnswersText)
         else setIsQuestionnaireDone(true)
       }
@@ -146,34 +137,26 @@ export const OnboardingProvider = ({ children }) => {
     setRecordedAnswers(r => r.slice(0, -1))
   }
 
-  // --- CAS 1 : MISE À JOUR DEPUIS LE PROFIL ("Refaire le test") ---
   const finalizeQuizOnly = async (finalRecorded, finalTexts) => {
-      setLoading(true); setLoadingText("Analyse de ta nouvelle personnalité...")
+      setLoading(true); setLoadingText("Analyse de ta personnalité...")
       try {
           const { data: { user } } = await supabase.auth.getUser()
           
-          // 1. Sauvegarde des réponses brutes (pour l'historique et "Points communs")
           const cleanAnswers = finalRecorded.map(({score_value, dimension, ...rest}) => ({ user_id: user.id, ...rest }))
           await supabase.from('user_answers').delete().eq('user_id', user.id)
           await supabase.from('user_answers').insert(cleanAnswers)
 
-          // 2. CALCUL ET SAUVEGARDE DES DIMENSIONS
           const dimensionScores = calculateDimensions(finalRecorded)
           
           await supabase.from('profiles').update({ 
-            dimensions: dimensionScores // <--- C'est ici que le "Vecteur" est mis à jour
+            dimensions: dimensionScores
           }).eq('id', user.id)
           
-          navigate('/profile') // Retour au profil
+          navigate('/profile')
       } catch (e) { console.error(e); setLoading(false) }
   }
 
-  // --- CAS 2 : PREMIER ONBOARDING (Depuis Landing) ---
-  // src/contexts/OnboardingContext.jsx
-
-// ... (début du fichier inchangé)
-
-  // --- CAS 2 : PREMIER ONBOARDING (Depuis Landing) ---
+  // --- CORRECTION CRITIQUE ICI (Erreur 400) ---
   const submitFullProfile = async () => {
       setLoading(true); setLoadingText("Création de ton univers...")
       try {
@@ -187,39 +170,45 @@ export const OnboardingProvider = ({ children }) => {
               photoUrl = data.publicUrl
           }
 
-          // 1. CALCUL DES DIMENSIONS
           const dimensionScores = calculateDimensions(recordedAnswers)
 
-          // 2. INSERTION/UPDATE DU PROFIL COMPLET
+          // ON A RETIRÉ 'email' et 'tags' CAR ILS N'EXISTENT PLUS EN BASE
           const updates = {
-              id: user.id, 
-              // email: user.email,  <-- LIGNE SUPPRIMÉE (L'email est géré par Supabase Auth)
-              pseudo: formData.pseudo, sexe: formData.sexe, date_naissance: formData.birthDate,
-              type_diplome: formData.etude, domaine: formData.theme, 
-              annee_etude: formData.etude.includes('Doctora') ? null : formData.annee,
-              intitule: formData.nom, parcours: formData.parcours || null, etudes_lieu: formData.lieu,
+              id: user.id,
+              // email: user.email,  <-- SUPPRIMÉ
+              pseudo: formData.pseudo, 
+              sexe: formData.sexe, 
+              date_naissance: formData.birthDate,
+              type_diplome: formData.etude, 
+              domaine: formData.theme, 
+              annee_etude: formData.etude?.includes('Doctora') ? null : formData.annee,
+              intitule: formData.nom, 
+              parcours: formData.parcours || null, 
+              etudes_lieu: formData.lieu,
               
               dimensions: dimensionScores, 
               
-              avatar_public: avatarPublic, avatar_prive: photoUrl,
-              //tags: [] 
+              avatar_public: avatarPublic, 
+              avatar_prive: photoUrl,
+              // tags: [] <-- SUPPRIMÉ
           }
           
           const { error } = await supabase.from('profiles').upsert(updates)
           if (error) throw error
 
-          // 3. SAUVEGARDE DES REPONSES
           if (!isEditMode) {
               const cleanAnswers = recordedAnswers.map(({score_value, dimension, ...rest}) => ({ user_id: user.id, ...rest }))
               await supabase.from('user_answers').delete().eq('user_id', user.id)
               await supabase.from('user_answers').insert(cleanAnswers)
           }
 
-          navigate('/app') 
-      } catch (e) { alert(e.message); setLoading(false) }
+          navigate('/app')
+      } catch (e) { 
+        console.error(e)
+        alert("Erreur lors de la sauvegarde : " + e.message)
+        setLoading(false) 
+      }
   }
-
-// ... (reste du fichier inchangé)
 
   const updateFormData = (field, value) => setFormData(prev => ({ ...prev, [field]: value }))
 
