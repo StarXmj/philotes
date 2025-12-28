@@ -157,11 +157,20 @@ export const OnboardingProvider = ({ children }) => {
   }
 
   // --- CORRECTION CRITIQUE ICI (Erreur 400) ---
+  // src/contexts/OnboardingContext.jsx
+
+// ... (début du fichier inchangé)
+
   const submitFullProfile = async () => {
       setLoading(true); setLoadingText("Création de ton univers...")
       try {
           const { data: { user } } = await supabase.auth.getUser()
           
+          // 1. Validation de sécurité (puisque le HTML required n'est plus là)
+          if (!formData.birthDate) {
+             throw new Error("La date de naissance est obligatoire.")
+          }
+
           let photoUrl = null
           if (realPhotoFile) {
               const fileName = `${user.id}-${Date.now()}.${realPhotoFile.name.split('.').pop()}`
@@ -172,13 +181,15 @@ export const OnboardingProvider = ({ children }) => {
 
           const dimensionScores = calculateDimensions(recordedAnswers)
 
-          // ON A RETIRÉ 'email' et 'tags' CAR ILS N'EXISTENT PLUS EN BASE
+          // 2. Préparation des données (Nettoyage)
           const updates = {
               id: user.id,
-              // email: user.email,  <-- SUPPRIMÉ
               pseudo: formData.pseudo, 
               sexe: formData.sexe, 
-              date_naissance: formData.birthDate,
+              
+              // CORRECTION ICI : On s'assure que c'est une date valide ou NULL (jamais "")
+              date_naissance: formData.birthDate || null,
+              
               type_diplome: formData.etude, 
               domaine: formData.theme, 
               annee_etude: formData.etude?.includes('Doctora') ? null : formData.annee,
@@ -190,7 +201,6 @@ export const OnboardingProvider = ({ children }) => {
               
               avatar_public: avatarPublic, 
               avatar_prive: photoUrl,
-              // tags: [] <-- SUPPRIMÉ
           }
           
           const { error } = await supabase.from('profiles').upsert(updates)
@@ -209,6 +219,8 @@ export const OnboardingProvider = ({ children }) => {
         setLoading(false) 
       }
   }
+
+// ... (reste du fichier inchangé)
 
   const updateFormData = (field, value) => setFormData(prev => ({ ...prev, [field]: value }))
 
