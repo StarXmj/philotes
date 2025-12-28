@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Users, GitCommitVertical, Magnet, RotateCcw } from 'lucide-react'
+import { Users, GitCommitVertical, Magnet, RotateCcw, Brain, FileText } from 'lucide-react'
 
-// Le Slider est déplacé ici car il ne sert qu'aux filtres
+// --- COMPOSANT SLIDER (Conservé tel quel car il est top) ---
 const DualRangeSlider = ({ min, max, onChange }) => {
     const [minVal, setMinVal] = useState(min)
     const [maxVal, setMaxVal] = useState(max)
@@ -36,10 +36,40 @@ const DualRangeSlider = ({ min, max, onChange }) => {
     )
 }
 
-export default function DashboardFilters({ showFriends, setShowFriends, setMatchRange, isOppositeMode, setIsOppositeMode }) {
+// --- FILTRES PRINCIPAUX (Design Premium + Switch) ---
+export default function DashboardFilters({ 
+    showFriends, setShowFriends, 
+    setMatchRange, 
+    isOppositeMode, setIsOppositeMode, 
+    scoreMode, setScoreMode // <--- Nouveaux props reçus du Dashboard
+}) {
   return (
     <div className="flex flex-col gap-6 p-4 w-64">
-        {/* Toggle Amis */}
+        
+        {/* 1. NOUVEAU : SÉLECTEUR DE SCORE (Style intégré) */}
+        <div className="bg-slate-900/60 backdrop-blur-md p-4 rounded-2xl border border-white/10">
+            <div className="flex justify-between mb-3">
+                <span className="text-xs font-bold text-gray-400 uppercase flex items-center gap-2">
+                    <Brain size={12}/> Mode de calcul
+                </span>
+            </div>
+            <div className="flex bg-black/40 p-1 rounded-xl border border-white/10">
+                <button 
+                    onClick={() => setScoreMode('IA')}
+                    className={`flex-1 py-2 px-2 rounded-lg flex items-center justify-center gap-2 transition-all text-xs font-bold ${scoreMode === 'IA' ? 'bg-philo-primary text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                >
+                    <Brain size={14} /> IA
+                </button>
+                <button 
+                    onClick={() => setScoreMode('PROFIL')}
+                    className={`flex-1 py-2 px-2 rounded-lg flex items-center justify-center gap-2 transition-all text-xs font-bold ${scoreMode === 'PROFIL' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                >
+                    <FileText size={14} /> Profil
+                </button>
+            </div>
+        </div>
+
+        {/* 2. TOGGLE AMIS */}
         <div className="bg-slate-900/60 backdrop-blur-md p-4 rounded-2xl border border-white/10">
             <label className="flex items-center gap-3 cursor-pointer group select-none">
                 <div className={`w-6 h-6 rounded-md border-2 flex items-center justify-center transition ${showFriends ? 'bg-philo-primary border-philo-primary' : 'border-gray-500 group-hover:border-white'}`}>
@@ -50,7 +80,7 @@ export default function DashboardFilters({ showFriends, setShowFriends, setMatch
             </label>
         </div>
 
-        {/* Slider Intervalle */}
+        {/* 3. SLIDER INTERVALLE */}
         <div className="bg-slate-900/60 backdrop-blur-md p-4 rounded-2xl border border-white/10 pb-8">
             <div className="flex justify-between mb-4">
                 <span className="text-xs font-bold text-gray-400 uppercase flex items-center gap-2"><GitCommitVertical size={12}/> Compatibilité</span>
@@ -60,7 +90,7 @@ export default function DashboardFilters({ showFriends, setShowFriends, setMatch
             </div>
         </div>
 
-        {/* Actions */}
+        {/* 4. ACTIONS */}
         <div className="flex gap-2">
             <button 
             onClick={() => setIsOppositeMode(!isOppositeMode)}
@@ -71,7 +101,7 @@ export default function DashboardFilters({ showFriends, setShowFriends, setMatch
             </button>
 
             <button 
-            onClick={() => { setShowFriends(true); setMatchRange([0, 100]); setIsOppositeMode(false); }}
+            onClick={() => { setShowFriends(true); setMatchRange([0, 100]); setIsOppositeMode(false); setScoreMode('IA'); }}
             className="px-3 rounded-xl bg-slate-900/60 border border-white/10 text-gray-400 hover:text-white hover:bg-slate-800 transition"
             title="Réinitialiser"
             >
