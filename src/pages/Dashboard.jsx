@@ -3,9 +3,10 @@ import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { AnimatePresence, motion } from 'framer-motion'
 import { 
-  UserCircle, LogOut, List, ChevronLeft, ChevronRight, 
+  UserCircle, List, ChevronLeft, ChevronRight, 
   PanelLeftOpen, PanelRightOpen, Search, X, Sparkles, 
-  GraduationCap, MessageCircle, Globe, SlidersHorizontal, User 
+  GraduationCap, MessageCircle, Globe, SlidersHorizontal, User,
+  MessageSquare
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
@@ -46,6 +47,9 @@ export default function Dashboard() {
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true)
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true)
 
+  // Mode Chat Desktop
+  const [isChatPage, setIsChatPage] = useState(false)
+
   // --- 2. LOGIQUE ---
   const markAsRead = useCallback(async (senderId) => {
       setUnreadCounts(prev => { const newCounts = { ...prev }; delete newCounts[senderId]; return newCounts })
@@ -67,7 +71,14 @@ export default function Dashboard() {
   const handleTabFilters = () => { setMobileTab('filters'); setActiveChatUser(null); }
   const handleTabChats = () => { setMobileTab('chats'); setOnlyFriends(true); setShowFriends(true); setSearchQuery(''); setActiveChatUser(null); }
   const handleTabProfile = () => { navigate('/profile') }
-  const handleOpenChatsDesktop = () => { setOnlyFriends(true); setShowFriends(true); setIsRightSidebarOpen(true); }
+
+  const toggleDesktopChatMode = () => {
+    if (isChatPage) {
+        setIsChatPage(false); setOnlyFriends(false); setActiveChatUser(null)
+    } else {
+        setIsChatPage(true); setOnlyFriends(true); setShowFriends(true); setIsRightSidebarOpen(true); setActiveChatUser(null)
+    }
+  }
 
   // --- 4. CHARGEMENT ---
   useEffect(() => {
@@ -141,7 +152,7 @@ export default function Dashboard() {
 
   // --- HANDLERS UI ---
   const handleUserSelect = (targetUser) => { 
-      if (mobileTab === 'chats') {
+      if (mobileTab === 'chats' || isChatPage) {
           setActiveChatUser(targetUser)
           markAsRead(targetUser.id)
           return
@@ -157,7 +168,6 @@ export default function Dashboard() {
   }
   
   const handleCloseProfile = () => { setIsSidebarVisible(false); setTimeout(() => setSelectedUser(null), 300) }
-  const handleLogout = async () => await supabase.auth.signOut() 
 
   if (authLoading || loadingMatches) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white"><p className="animate-pulse">Chargement...</p></div>
 
@@ -178,16 +188,12 @@ export default function Dashboard() {
       <div className="flex justify-between items-center z-30 w-full max-w-full mx-auto py-2 px-4 md:px-10 shrink-0 relative bg-slate-900/50 md:bg-transparent backdrop-blur-sm md:backdrop-blur-none border-b border-white/5 md:border-none">
         <h1 className="text-xl md:text-2xl font-bold hidden xs:block">Philotès<span className="text-philo-primary">.</span></h1>
         
-        {/* MODIFICATION ICI : Positionnement Dynamique du Switch 
-            - Si Liste : Droite (right-4) + Normal (mt-2)
-            - Si Constellation : Centre (left-1/2) + Baissé (mt-8)
-            - Sur Desktop (md:) : Toujours centré et normal (mt-0)
-        */}
-        {!['filters', 'chats'].includes(mobileTab) && (
+        {/* MODIF 1 : Positionnement du Switch (Plus bas avec mt-14) */}
+        {!['filters', 'chats'].includes(mobileTab) && !isChatPage && (
             <div className={`absolute top-0 flex items-center bg-slate-800 rounded-full p-1 border border-white/10 shadow-lg gap-1 transition-all duration-300 z-50 
                 ${mobileTab === 'list' 
                     ? 'right-4 mt-2 md:left-1/2 md:right-auto md:mt-0 md:-translate-x-1/2' 
-                    : 'left-1/2 mt-8 -translate-x-1/2 md:mt-0'
+                    : 'left-1/2 mt-14 -translate-x-1/2 md:mt-0' 
                 }
             `}>
                 <button onClick={() => setScoreMode('VIBES')} className={`relative px-4 py-1.5 rounded-full text-xs font-bold transition-all z-10 flex items-center gap-2 ${scoreMode === 'VIBES' ? 'text-white' : 'text-gray-400'}`}>
@@ -201,24 +207,33 @@ export default function Dashboard() {
             </div>
         )}
 
-        <div className="flex gap-2 items-center">
-            <button onClick={handleOpenChatsDesktop} className="hidden md:flex relative p-2 rounded-full transition-all border border-white/10 bg-white/10 text-gray-300 hover:bg-white/20">
-                <MessageCircle size={20} />
-                {totalUnread > 0 && <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm animate-pulse">{totalUnread > 9 ? '9+' : totalUnread}</span>}
+        {/* MODIF 2 : Groupe Boutons à Droite (ml-auto ajouté) */}
+        <div className="flex gap-2 items-center ml-auto">
+            {/* BOUTON CHAT (DESKTOP) */}
+            <button 
+                onClick={toggleDesktopChatMode} 
+                className={`hidden md:flex relative p-2 rounded-full transition-all border ${isChatPage ? 'bg-philo-primary text-white border-philo-primary' : 'bg-white/10 text-gray-300 border-white/10 hover:bg-white/20'}`}
+                title={isChatPage ? "Retour Constellation" : "Mes Messages"}
+            >
+                {isChatPage ? <Globe size={20}/> : <MessageCircle size={20} />}
+                {!isChatPage && totalUnread > 0 && <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white shadow-sm animate-pulse">{totalUnread > 9 ? '9+' : totalUnread}</span>}
             </button>
-            <button onClick={() => setIs3D(!is3D)} className="hidden md:flex p-2 bg-white/10 rounded-full text-xs font-bold w-10 h-10 items-center justify-center border border-white/10">
-                {is3D ? "2D" : "3D"}
-            </button>
+            
+            {!isChatPage && (
+                <button onClick={() => setIs3D(!is3D)} className="hidden md:flex p-2 bg-white/10 rounded-full text-xs font-bold w-10 h-10 items-center justify-center border border-white/10">
+                    {is3D ? "2D" : "3D"}
+                </button>
+            )}
+
             <button onClick={() => navigate('/profile')} className="hidden md:block rounded-full w-10 h-10 overflow-hidden border border-white/20">
                 {myProfile?.avatar_public ? <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover" /> : <UserCircle size={38} className="text-gray-300 p-1" />}
             </button>
-            <button onClick={handleLogout} className="hidden md:flex p-2 bg-white/10 rounded-full"><LogOut size={20} /></button>
         </div>
       </div>
 
       <div className="flex-1 flex relative overflow-hidden min-h-0 pb-[70px] md:pb-0"> 
           
-          <motion.div initial={{ x: 0 }} animate={{ x: isLeftSidebarOpen ? 0 : -300 }} className="hidden md:block absolute left-0 top-0 z-20 h-full w-64 border-r border-white/5 bg-philo-dark/50 backdrop-blur-sm">
+          <motion.div initial={{ x: 0 }} animate={{ x: (isLeftSidebarOpen && !isChatPage) ? 0 : -300 }} className="hidden md:block absolute left-0 top-0 z-20 h-full w-64 border-r border-white/5 bg-philo-dark/50 backdrop-blur-sm">
              <div className="flex justify-between items-center p-4 border-b border-white/10">
                  <h2 className="text-sm font-bold uppercase text-gray-400">Filtres</h2>
                  <button onClick={() => setIsLeftSidebarOpen(false)}><ChevronLeft size={18}/></button>
@@ -231,7 +246,10 @@ export default function Dashboard() {
           <motion.div initial={{ x: 0 }} animate={{ x: isRightSidebarOpen ? 0 : 450 }} className="hidden md:block absolute right-0 top-0 z-20 h-full w-80 lg:w-96 border-l border-white/10 bg-slate-900/30 backdrop-blur-sm">
              <div className="h-full flex flex-col">
                 <div className="p-4 border-b border-white/10 shrink-0 flex justify-between items-center mb-2">
-                    <h3 className="text-sm font-bold uppercase text-gray-400 flex items-center gap-2"><List size={14}/> Résultats ({processedMatches.length})</h3>
+                    <h3 className="text-sm font-bold uppercase text-gray-400 flex items-center gap-2">
+                        <List size={14}/> 
+                        {isChatPage ? "Mes Discussions" : `Résultats (${processedMatches.length})`}
+                    </h3>
                     <button onClick={() => setIsRightSidebarOpen(false)}><ChevronRight size={18}/></button>
                 </div>
                 <SearchBar />
@@ -241,11 +259,11 @@ export default function Dashboard() {
              </div>
           </motion.div>
 
-          {!isLeftSidebarOpen && (<motion.button initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsLeftSidebarOpen(true)} className="hidden md:flex absolute left-4 top-4 z-30 p-2 bg-slate-800/80 rounded-lg"><PanelLeftOpen size={20}/></motion.button>)}
+          {!isLeftSidebarOpen && !isChatPage && (<motion.button initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsLeftSidebarOpen(true)} className="hidden md:flex absolute left-4 top-4 z-30 p-2 bg-slate-800/80 rounded-lg"><PanelLeftOpen size={20}/></motion.button>)}
           {!isRightSidebarOpen && (<motion.button initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} onClick={() => setIsRightSidebarOpen(true)} className="hidden md:flex absolute right-4 top-4 z-30 p-2 bg-slate-800/80 rounded-lg"><PanelRightOpen size={20}/></motion.button>)}
 
           {/* VUE CENTRALE */}
-          <div className={`flex-1 relative overflow-hidden w-full h-full transition-all duration-300 ease-in-out ${isLeftSidebarOpen ? 'md:pl-64' : 'md:pl-0'} ${isRightSidebarOpen ? 'md:pr-80 lg:pr-96' : 'md:pr-0'}`}>
+          <div className={`flex-1 relative overflow-hidden w-full h-full transition-all duration-300 ease-in-out ${isLeftSidebarOpen && !isChatPage ? 'md:pl-64' : 'md:pl-0'} ${isRightSidebarOpen ? 'md:pr-80 lg:pr-96' : 'md:pr-0'}`}>
              
              {/* MOBILE */}
              <div className="block md:hidden h-full w-full">
@@ -283,14 +301,36 @@ export default function Dashboard() {
              </div>
 
              {/* DESKTOP */}
-             <div className="hidden md:block h-full w-full">
-                {is3D ? (
-                    <Constellation3D matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+             <div className="hidden md:block h-full w-full bg-slate-900">
+                {isChatPage ? (
+                    <div className="w-full h-full flex flex-col items-center justify-center bg-black/20">
+                        {activeChatUser ? (
+                            <div className="w-full h-full">
+                                <ChatInterface 
+                                    currentUser={user} 
+                                    targetUser={activeChatUser}
+                                    connection={activeChatUser.connection} 
+                                    onBack={() => setActiveChatUser(null)} 
+                                    onCreateConnection={async () => { }} 
+                                />
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center text-gray-500 gap-4">
+                                <div className="p-6 rounded-full bg-white/5 border border-white/10 animate-pulse">
+                                    <MessageSquare size={48} />
+                                </div>
+                                <p className="text-lg font-medium">Sélectionne une discussion à droite</p>
+                            </div>
+                        )}
+                    </div>
                 ) : (
-                    <ConstellationView matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+                    is3D ? (
+                        <Constellation3D matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} selectedUser={selectedUser} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+                    ) : (
+                        <ConstellationView matches={processedMatches} myProfile={myProfile} onSelectUser={handleUserSelect} unreadCounts={unreadCounts} myId={user?.id} scoreMode={scoreMode} />
+                    )
                 )}
              </div>
-
           </div>
       </div>
 
@@ -325,7 +365,6 @@ export default function Dashboard() {
           </button>
       </div>
 
-      {/* MODALE PROFIL */}
       <AnimatePresence>
           {(selectedUser && isSidebarVisible && !activeChatUser) && (
               <>
@@ -335,10 +374,9 @@ export default function Dashboard() {
           )}
       </AnimatePresence>
 
-      {/* MODALE CHAT DIRECT */}
       <AnimatePresence>
-          {activeChatUser && (
-              <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ duration: 0.3 }} className="fixed inset-0 z-[60] bg-slate-900 flex flex-col">
+          {activeChatUser && !isChatPage && (
+              <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ duration: 0.3 }} className="fixed inset-0 z-[60] bg-slate-900 flex flex-col md:hidden">
                   <ChatInterface 
                       currentUser={user} 
                       targetUser={activeChatUser}

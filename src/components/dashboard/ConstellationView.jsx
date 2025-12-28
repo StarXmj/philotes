@@ -1,6 +1,6 @@
 // src/components/dashboard/ConstellationView.jsx
-import { useMemo, useRef, useState, memo } from 'react'
-import { motion } from 'framer-motion'
+import { useMemo, useRef, useState, memo, useEffect } from 'react'
+import { motion, useMotionValue } from 'framer-motion'
 import { User, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react'
 
 const OrbitalRing = ({ radius, duration, children, reverse = false }) => (
@@ -23,7 +23,6 @@ const MatchNode = memo(({ match, onClick, unreadCount, myId, scoreMode }) => {
     const isPendingRequest = match.connection?.status === 'pending' && match.connection?.receiver_id === myId
     const hasUnreadMessages = unreadCount > 0
     
-    // 1. RECUPERATION & NORMALISATION
     let rawScore = scoreMode === 'VIBES' ? (match.personality_score || 0) : (match.profile_score || 0)
     if (rawScore <= 1) rawScore *= 100
     const pct = Math.round(rawScore)
@@ -53,28 +52,59 @@ const MatchNode = memo(({ match, onClick, unreadCount, myId, scoreMode }) => {
 
 const ConstellationView = ({ matches = [], myProfile, onSelectUser, unreadCounts = {}, myId, scoreMode }) => {
   const containerRef = useRef(null)
+  
+  // États de navigation
   const [zoom, setZoom] = useState(0.6)
+  const [isDraggingEnabled, setIsDraggingEnabled] = useState(true) // Nouveau : Contrôle du drag
+  
   const touchStartDist = useRef(null)
 
-  const handleTouchStart = (e) => { if (e.touches.length === 2) touchStartDist.current = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY) }
+  // Gestion Tactile Améliorée
+  const handleTouchStart = (e) => { 
+      if (e.touches.length === 2) {
+          // Si 2 doigts : On désactive le drag pour éviter les conflits et on prépare le zoom
+          setIsDraggingEnabled(false)
+          touchStartDist.current = Math.hypot(
+              e.touches[0].clientX - e.touches[1].clientX, 
+              e.touches[0].clientY - e.touches[1].clientY
+          ) 
+      }
+  }
+
   const handleTouchMove = (e) => {
     if (e.touches.length === 2 && touchStartDist.current !== null) {
-      const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
-      setZoom(prev => Math.min(Math.max(0.1, prev + (d - touchStartDist.current) * 0.005), 4))
+      // Calcul de la nouvelle distance
+      const d = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX, 
+          e.touches[0].clientY - e.touches[1].clientY
+      )
+      
+      // Facteur de sensibilité (0.003 est plus doux que 0.005)
+      const sensitivity = 0.003
+      const delta = (d - touchStartDist.current) * sensitivity
+      
+      setZoom(prev => Math.min(Math.max(0.2, prev + delta), 3)) // Bornes min 0.2 / max 3
+      
       touchStartDist.current = d
     }
   }
-  const handleTouchEnd = () => { touchStartDist.current = null }
-  const handleWheel = (e) => { setZoom(prev => Math.min(Math.max(0.1, prev + (e.deltaY * -0.001)), 4)) }
+
+  const handleTouchEnd = () => { 
+      touchStartDist.current = null 
+      setIsDraggingEnabled(true) // On réactive le drag quand on lâche
+  }
+
+  const handleWheel = (e) => { 
+      // Zoom molette (PC)
+      setZoom(prev => Math.min(Math.max(0.2, prev + (e.deltaY * -0.001)), 3)) 
+  }
 
   const orbits = useMemo(() => {
     const cat = { orbit1: [], orbit2: [], orbit3: [], orbit4: [], orbit5: [] }
     if (!matches || !Array.isArray(matches)) return cat;
-    
     matches.forEach(m => {
         let rawScore = scoreMode === 'VIBES' ? (m.personality_score || 0) : (m.profile_score || 0)
         if (rawScore <= 1) rawScore *= 100 
-        
         if (m.connection?.status === 'accepted') cat.orbit1.push(m) 
         else if (rawScore >= 85) cat.orbit2.push(m)
         else if (rawScore >= 60) cat.orbit3.push(m)
@@ -84,22 +114,49 @@ const ConstellationView = ({ matches = [], myProfile, onSelectUser, unreadCounts
     return cat
   }, [matches, scoreMode])
 
+  // Reset de la vue
+  const handleReset = () => {
+      setZoom(0.6)
+      // Note: On ne peut pas reset la position x/y facilement avec Framer Motion drag simple, 
+      // mais le zoom reset aide déjà à se repérer.
+  }
+
   return (
-    <div ref={containerRef} className="relative w-full h-full bg-slate-900/40 overflow-hidden cursor-grab active:cursor-grabbing group flex items-center justify-center touch-none" onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}>
-        {/* NOUVEAU WIDGET ZOOM (IDENTIQUE À LA 3D) */}
+    <div 
+        ref={containerRef} 
+        className="relative w-full h-full bg-slate-900/40 overflow-hidden cursor-grab active:cursor-grabbing group flex items-center justify-center touch-none" 
+        onTouchStart={handleTouchStart} 
+        onTouchMove={handleTouchMove} 
+        onTouchEnd={handleTouchEnd}
+    >
+        {/* WIDGET ZOOM (Position et Style identiques à la 3D) */}
         <div className="absolute bottom-20 left-6 z-40 flex flex-col gap-3">
-            <button onClick={() => setZoom(prev => Math.min(prev + 0.2, 4))} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+            <button onClick={() => setZoom(prev => Math.min(prev + 0.2, 3))} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
                 <ZoomIn size={24}/>
             </button>
-            <button onClick={() => setZoom(0.6)} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+            <button onClick={handleReset} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
                 <RotateCcw size={24}/>
             </button>
-            <button onClick={() => setZoom(prev => Math.max(prev - 0.2, 0.1))} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
+            <button onClick={() => setZoom(prev => Math.max(prev - 0.2, 0.2))} className="w-12 h-12 flex items-center justify-center bg-slate-800/90 backdrop-blur-md rounded-full border border-white/20 shadow-xl active:scale-95 transition-transform text-white">
                 <ZoomOut size={24}/>
             </button>
         </div>
 
-        <motion.div drag dragConstraints={containerRef} whileTap={{ cursor: "grabbing" }} onWheel={handleWheel} animate={{ scale: zoom }} className="flex items-center justify-center origin-center">
+        {/* ZONE DE CONTENU DRAGGABLE 
+            - drag={isDraggingEnabled} : Le drag se coupe si on zoome
+            - dragElastic={0.2} : Donne un effet élastique agréable aux bords
+            - dragConstraints : Supprimé ou très large pour éviter le blocage
+        */}
+        <motion.div 
+            drag={isDraggingEnabled} 
+            dragElastic={0.1} 
+            dragMomentum={false} // Désactive l'inertie du drag pour plus de précision tactile
+            whileTap={{ cursor: "grabbing" }} 
+            onWheel={handleWheel} 
+            animate={{ scale: zoom }} 
+            transition={{ type: "spring", stiffness: 300, damping: 30 }} // Animation fluide du zoom
+            className="flex items-center justify-center origin-center"
+        >
             <div className="relative w-[3000px] h-[3000px] flex items-center justify-center flex-shrink-0">
                 <div className="absolute z-20 w-24 h-24 md:w-32 md:h-32 rounded-full bg-gradient-to-br from-philo-primary to-philo-secondary p-1 animate-pulse"><div className="w-full h-full rounded-full overflow-hidden border-4 border-slate-900 bg-slate-900">{myProfile?.avatar_public && <img src={`/avatars/${myProfile.avatar_public}`} className="w-full h-full object-cover"/>}</div></div>
                 {orbits.orbit1.length > 0 && <OrbitalRing radius={250} duration={60}>{orbits.orbit1.map((m, i) => <Planet key={m.id} radius={250} angle={(i/orbits.orbit1.length)*2*Math.PI} duration={60}><MatchNode match={m} onClick={onSelectUser} unreadCount={unreadCounts[m.id] || 0} myId={myId} scoreMode={scoreMode} /></Planet>)}</OrbitalRing>}
