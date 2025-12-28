@@ -9,7 +9,11 @@ import AvatarStep from '../components/onboarding/AvatarStep'
 // Composant interne qui consomme le contexte
 function OnboardingContent() {
   const { loading, loadingText, isQuestionnaireDone, setIsQuestionnaireDone, isQuizOnly } = useOnboarding()
-  const [step, setStep] = useState('quiz') // 'quiz', 'info', 'avatars'
+  
+  // CORRECTION ICI : On initialise à 'info' (et pas 'quiz')
+  // Car tant que le quiz n'est pas fini, cette variable est ignorée.
+  // Dès qu'il est fini, on veut tomber sur 'info'.
+  const [step, setStep] = useState('info') 
 
   // Gestionnaire d'affichage
   if (loading) {
@@ -23,16 +27,14 @@ function OnboardingContent() {
     )
   }
 
-  // 1. Mode Quiz (Prioritaire)
+  // 1. Mode Quiz (Prioritaire - Tant que non fini, on reste ici)
   if (!isQuestionnaireDone) {
       return <QuizStep />
   }
 
-  // Si on est ici, le quiz est fini.
-  // En mode "QuizOnly", le contexte gère la redirection, donc on affiche rien ou un loader.
   if (isQuizOnly) return null 
 
-  // 2. Mode Formulaire & Avatar
+  // 2. Mode Formulaire & Avatar (Une fois le quiz fini)
   return (
       <div className="relative w-full flex justify-center">
           {/* Bouton Retour Step */}
@@ -47,6 +49,7 @@ function OnboardingContent() {
               </button>
           )}
 
+          {/* Ici, comme step vaut 'info', on affiche bien le formulaire */}
           {step === 'info' ? (
               <InfoFormStep onNext={() => setStep('avatars')} />
           ) : (
