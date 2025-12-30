@@ -6,7 +6,7 @@ import {
   UserCircle, List, ChevronLeft, ChevronRight, 
   PanelLeftOpen, PanelRightOpen, Search, X, Sparkles, 
   GraduationCap, MessageCircle, Globe, SlidersHorizontal, User,
-  MessageSquare
+  MessageSquare,Zap
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
@@ -211,6 +211,15 @@ export default function Dashboard() {
 
         {/* GROUPE DROITE (Chat, 3D, Profil) - Uniquement XL (Desktop) */}
         <div className="hidden xl:flex gap-2 items-center ml-auto">
+
+            {/* BOUTON OMEGLE MODE */}
+<button 
+    onClick={() => navigate('/random')}
+    className="hidden xl:flex relative p-2 rounded-full transition-all border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-white hover:shadow-[0_0_15px_rgba(239,68,68,0.4)]"
+    title="Mode Aléatoire"
+>
+    <Zap size={20} />
+</button>
             <button 
                 onClick={toggleDesktopChatMode} 
                 className={`relative p-2 rounded-full transition-all border ${isChatPage ? 'bg-philo-primary text-white border-philo-primary' : 'bg-white/10 text-gray-300 border-white/10 hover:bg-white/20'}`}
@@ -343,6 +352,14 @@ export default function Dashboard() {
              <SlidersHorizontal size={24} strokeWidth={mobileTab === 'filters' ? 2.5 : 2} />
              <span className="text-[10px] font-medium mt-1">Filtres</span>
           </button>
+          <button onClick={() => navigate('/random')} className="flex flex-col items-center justify-center p-2 rounded-xl text-gray-400 hover:text-white group">
+        <div className="relative">
+            <Zap size={24} strokeWidth={2} className="group-hover:text-red-400 transition-colors"/>
+            {/* Petit point rouge pour attirer l'attention (optionnel) */}
+            <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+        </div>
+        <span className="text-[10px] font-medium mt-1 group-hover:text-red-400 transition-colors">Random</span>
+    </button>
           <button onClick={handleTabChats} className={`relative flex flex-col items-center justify-center p-2 rounded-xl transition-all ${mobileTab === 'chats' ? 'text-philo-primary' : 'text-gray-400 hover:text-white'}`}>
              <div className="relative">
                 <MessageCircle size={24} strokeWidth={mobileTab === 'chats' ? 2.5 : 2} />

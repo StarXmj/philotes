@@ -9,6 +9,8 @@ import Landing from './pages/Landing'
 import Onboarding from './pages/Onboarding'
 import Dashboard from './pages/Dashboard'
 
+import RandomChatMode from './pages/RandomChatMode'
+
 // Petit wrapper pour rediriger automatiquement depuis la Landing si déjà connecté
 const PublicOnlyRoute = ({ children }) => {
   const { user, loading } = useAuth()
@@ -44,6 +46,7 @@ function App() {
               </ProtectedRoute>
             } />
             
+            
             <Route path="/profile" element={
               <ProtectedRoute requireProfile={true}>
                 <Profile />
@@ -55,6 +58,12 @@ function App() {
                 <UpdatePassword />
               </ProtectedRoute>
             } />
+
+            <Route path="/random" element={
+    <ProtectedRoute>
+        <RandomChatMode />
+    </ProtectedRoute>
+} />
 
             {/* Fallback */}
             <Route path="*" element={<Navigate to="/" replace />} />
