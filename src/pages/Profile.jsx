@@ -3,10 +3,9 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabaseClient'
 import { useAuth } from '../contexts/AuthContext' 
-import { ArrowLeft, Save, GraduationCap, MapPin, User, BrainCircuit, Loader2, Sparkles, Lock, KeyRound, ShieldCheck, AlertCircle, CheckCircle, Image as ImageIcon, Check, Trash2, Eye, EyeOff, LogOut } from 'lucide-react'
+import { ArrowLeft, Save, GraduationCap, MapPin, User, BrainCircuit, Loader2, Sparkles, Lock, KeyRound, ShieldCheck, AlertCircle, CheckCircle, Image as ImageIcon, Check, Trash2, Eye, EyeOff, LogOut, Mail } from 'lucide-react'
 import { motion } from 'framer-motion'
 
-// ... (Gardez les constantes CAMPUS_LIST et AVATARS_LIST inchangées) ...
 const CAMPUS_LIST = ["Pau", "Bayonne", "Anglet", "Tarbes", "Mont-de-Marsan"]
 const AVATARS_LIST = ["avatar1.png", "avatar2.png", "avatar3.png", "avatar4.png", "avatar5.png", "avatar6.png", "avatar7.png", "avatar8.png"]
 
@@ -19,7 +18,8 @@ export default function Profile() {
   
   const [hasChanges, setHasChanges] = useState(false)
 
-  // --- ÉTATS (Gardez vos états existants) ---
+  // --- ÉTATS ---
+  const [email, setEmail] = useState('') // NOUVEAU : État pour l'email
   const [pseudo, setPseudo] = useState('')
   const [sexe, setSexe] = useState('')
   const [birthDate, setBirthDate] = useState('')
@@ -41,14 +41,13 @@ export default function Profile() {
 
   const [myVibes, setMyVibes] = useState([])
 
-  // Password states (Gardez vos états password)
+  // Password states
   const [isEditingPassword, setIsEditingPassword] = useState(false)
   const [passwordData, setPasswordData] = useState({ new: '', confirm: '' })
   const [showPassword, setShowPassword] = useState(false)
   const [passMessage, setPassMessage] = useState({ type: '', text: '' })
   const [passLoading, setPassLoading] = useState(false)
 
-  // ... (Gardez getPasswordStrength, getStrengthColor, getStrengthLabel inchangés) ...
   const getPasswordStrength = (pass) => {
     let score = 0; if (!pass) return 0; if (pass.length > 5) score += 1; if (pass.length > 8) score += 1; if (/[0-9]/.test(pass)) score += 1; if (/[^A-Za-z0-9]/.test(pass)) score += 1; return score
   }
@@ -56,11 +55,14 @@ export default function Profile() {
   const getStrengthColor = () => { if (strength === 0) return 'bg-gray-600'; if (strength <= 2) return 'bg-red-500'; if (strength === 3) return 'bg-yellow-500'; return 'bg-green-500' }
   const getStrengthLabel = () => { if (strength <= 2) return 'Faible'; if (strength === 3) return 'Moyen'; return 'Fort 💪' }
 
-  // 1. CHARGEMENT (Identique)
+  // 1. CHARGEMENT
   useEffect(() => {
     const loadProfile = async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return navigate('/')
+
+      // RÉCUPÉRATION DE L'EMAIL
+      setEmail(user.email || '')
 
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
 
@@ -95,7 +97,7 @@ export default function Profile() {
     loadProfile()
   }, [navigate])
 
-  // --- PROTECTION NAVIGATION (Identique) ---
+  // --- PROTECTION NAVIGATION ---
   useEffect(() => {
     const handleBeforeUnload = (e) => { if (hasChanges) { e.preventDefault(); e.returnValue = '' } }
     window.addEventListener('beforeunload', handleBeforeUnload)
@@ -105,12 +107,12 @@ export default function Profile() {
   const handleBack = () => { if (hasChanges) { if (window.confirm("Modifications non enregistrées. Quitter quand même ?")) navigate('/app') } else { navigate('/app') } }
   const markChanged = () => { if (!hasChanges) setHasChanges(true) }
 
-  // --- LOGIQUE PHOTO & DELETE (Identique) ---
+  // --- LOGIQUE PHOTO & DELETE ---
   const handlePhotoUpload = (e) => { const file = e.target.files[0]; if (file) { setRealPhotoFile(file); setRealPhotoPreview(URL.createObjectURL(file)); markChanged() } }
   const handleRemovePhoto = () => { setRealPhotoFile(null); setRealPhotoPreview(null); setCurrentRealPhotoUrl(null); markChanged() }
   const deleteOldAvatar = async () => { const oldUrl = oldPhotoUrlRef.current; if (!oldUrl) return; const parts = oldUrl.split('/'); const fileName = parts[parts.length - 1]; if (fileName) await supabase.storage.from('profiles').remove([fileName]) }
 
-  // --- SAUVEGARDE (Identique) ---
+  // --- SAUVEGARDE ---
   const handleSaveProfile = async (e) => {
     e.preventDefault(); setSaving(true)
     try {
@@ -137,7 +139,7 @@ export default function Profile() {
     } catch (error) { console.error(error); alert("Erreur : " + error.message) } finally { setSaving(false) }
   }
 
-  // --- PASSWORD & QUIZ (Identique) ---
+  // --- PASSWORD & QUIZ ---
   const handleUpdatePassword = async (e) => {
     e.preventDefault(); if (strength < 2 || passwordData.new !== passwordData.confirm) return; setPassLoading(true)
     const { error } = await supabase.auth.updateUser({ password: passwordData.new })
@@ -147,14 +149,13 @@ export default function Profile() {
   }
   const handleRetakeQuiz = () => { if (hasChanges && !window.confirm("Sauvegarder avant de partir ?")) return; navigate('/onboarding', { state: { mode: 'quiz_only' } }) }
   
-  // --- NOUVEAU : FONCTION DECONNEXION ---
   const handleLogout = async () => {
     if (hasChanges && !window.confirm("Modifications non enregistrées. Se déconnecter quand même ?")) return
     await supabase.auth.signOut()
     navigate('/')
   }
 
-  // Options pour les selects (Identique)
+  // Options pour les selects
   const etudesOpts = [...new Set(formationsData.map(f => f.etude))].filter(Boolean).sort()
   const themesOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude).map(f => f.theme))].filter(Boolean).sort()
   const anneesOpts = [...new Set(formationsData.filter(f => f.etude === selectedEtude && f.theme === selectedTheme).map(f => f.annee))].filter(Boolean).sort()
@@ -165,7 +166,7 @@ export default function Profile() {
   if (loading) return <div className="min-h-screen bg-philo-dark flex items-center justify-center text-white"><Loader2 className="animate-spin mr-2"/> Chargement...</div>
 
   return (
-    <div className="min-h-screen bg-philo-dark p-6 md:p-10 text-white pb-40"> {/* pb-40 pour l'espace en bas */}
+    <div className="min-h-screen bg-philo-dark p-6 md:p-10 text-white pb-40">
       <div className="max-w-3xl mx-auto space-y-8">
         
         <div className="flex items-center gap-4">
@@ -176,7 +177,7 @@ export default function Profile() {
         </div>
 
         <form id="main-profile-form" onSubmit={handleSaveProfile} className="space-y-8">
-           {/* SECTION MOI (CODE IDENTIQUE À VOTRE FICHIER) */}
+           {/* SECTION MOI */}
            <div className="bg-white/5 p-6 rounded-3xl border border-white/10 shadow-lg">
             <div className="flex items-center gap-2 mb-6 text-philo-primary"><User size={24} /> <h2 className="font-bold uppercase text-sm tracking-wider">Moi</h2></div>
             <div className="mb-8 space-y-6">
@@ -205,9 +206,32 @@ export default function Profile() {
                     </div>
                 </div>
             </div>
+            
             <div className="w-full h-px bg-white/10 my-6"></div>
+            
             <div className="grid gap-6">
-              <div><label className="text-xs text-gray-400 uppercase block mb-1">Pseudo</label><input type="text" required value={pseudo} onChange={e => { setPseudo(e.target.value); markChanged(); }} className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:border-philo-primary focus:outline-none" /></div>
+              
+              {/* NOUVEAU CHAMP EMAIL (LECTURE SEULE) */}
+              <div>
+                <label className="text-xs text-gray-400 uppercase block mb-1 flex items-center justify-between">
+                    Email <Lock size={12} className="text-gray-500"/>
+                </label>
+                <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                    <input 
+                        type="text" 
+                        value={email} 
+                        disabled 
+                        className="w-full bg-slate-900/50 border border-slate-700 rounded-xl py-3 pl-10 pr-3 text-gray-400 cursor-not-allowed select-none" 
+                    />
+                </div>
+              </div>
+
+              <div>
+                  <label className="text-xs text-gray-400 uppercase block mb-1">Pseudo</label>
+                  <input type="text" required value={pseudo} onChange={e => { setPseudo(e.target.value); markChanged(); }} className="w-full bg-slate-800 border border-slate-600 rounded-xl p-3 text-white focus:border-philo-primary focus:outline-none" />
+              </div>
+              
               <div className="flex gap-4">
                 <div className="w-1/2"><label className="text-xs text-gray-400 uppercase block mb-1">Genre</label><select required value={sexe} onChange={e => { setSexe(e.target.value); markChanged(); }} className={selectStyle}><option value="Homme">Homme</option><option value="Femme">Femme</option><option value="Autre">Autre</option></select></div>
                 <div className="w-1/2"><label className="text-xs text-gray-400 uppercase block mb-1 flex justify-between">Naissance <Lock size={10}/></label><input type="date" value={birthDate} disabled className={`${selectStyle} opacity-50 cursor-not-allowed`} /></div>
@@ -265,7 +289,6 @@ export default function Profile() {
             {saving ? <Loader2 className="animate-spin"/> : <Save size={20} />} Enregistrer les modifications
           </button>
 
-          {/* AJOUT : BOUTON DE DÉCONNEXION */}
           <button type="button" onClick={handleLogout} className="w-full py-3 bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 text-red-400 rounded-2xl font-bold transition flex items-center justify-center gap-2">
             <LogOut size={18} /> Se déconnecter
           </button>

@@ -1,8 +1,11 @@
-import { useEffect, useState, useRef, useLayoutEffect } from 'react'
+// src/components/chat/ChatInterface.jsx
+import { useEffect, useState, useRef, useLayoutEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Send, Check, X, Pencil, Trash2, Clock, Loader2, Smile, AlertCircle, Sparkles } from 'lucide-react'
 import { supabase } from '../../lib/supabaseClient'
 import EmojiPicker from 'emoji-picker-react'
+// IMPORT DU SYSTÈME DE RECOMMANDATION
+import { generateIcebreakers } from '../../lib/recommendationSystem'
 
 const MESSAGE_LIFETIME_HOURS = 24
 const PAGE_SIZE = 20
@@ -41,6 +44,11 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
   const channelRef = useRef(null)
   const typingTimeoutRef = useRef(null)
   const scrollHeightRef = useRef(0)
+
+  // --- 1. GÉNÉRATION DES SUGGESTIONS ---
+  const suggestions = useMemo(() => {
+      return generateIcebreakers(currentUser, targetUser)
+  }, [currentUser, targetUser])
 
   let statusLabel = connection?.status === 'pending' ? "En attente" : connection?.status === 'accepted' ? "Lien actif ✨" : "Aucun lien"
   const canChat = !connection || connection.status === 'accepted'
@@ -83,7 +91,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
           setMessages((current) => current.map(m => m.id === payload.new.id ? payload.new : m))
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, (payload) => {
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages', filter: `connection_id=eq.${connection.id}` }, (payload) => {
           setMessages((current) => current.filter(m => m.id !== payload.old.id))
       })
       .on('broadcast', { event: 'typing' }, (payload) => {
@@ -129,11 +137,17 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     if (connection?.id && channelRef.current) channelRef.current.send({ type: 'broadcast', event: 'typing', payload: { userId: currentUser.id } })
   }
   const onEmojiClick = (emojiObject) => { setInputText(prev => prev + emojiObject.emoji); setShowEmojiPicker(false) }
-  const sendMessage = async (e) => {
-    e.preventDefault()
-    if (!inputText.trim()) return
-    const text = inputText
-    setInputText('')
+  
+  // --- 2. MODIFICATION DU SENDMESSAGE (Supporte l'envoi direct par suggestion) ---
+  const sendMessage = async (e, textOverride = null) => {
+    if (e) e.preventDefault()
+    
+    const text = textOverride || inputText
+    if (!text.trim()) return
+    
+    // On vide l'input seulement si c'est une saisie manuelle
+    if (!textOverride) setInputText('')
+    
     setShowEmojiPicker(false)
     
     try {
@@ -147,7 +161,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         const { error } = await supabase.from('messages').insert({
           connection_id: currentConn.id,
           sender_id: currentUser.id,
-          receiver_id: targetUser.id, // <--- C'EST CETTE LIGNE QUI MANQUAIT !
+          receiver_id: targetUser.id,
           content: text
         })
         if (error) throw error
@@ -156,7 +170,7 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
     } catch (error) { 
         console.error(error)
         showToast("Erreur d'envoi.")
-        setInputText(text)
+        if (!textOverride) setInputText(text)
     }
   }
 
@@ -169,33 +183,61 @@ export default function ChatInterface({ currentUser, targetUser, connection, onB
         <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition text-gray-300"><ArrowLeft size={20} /></button>
         <div className="flex-1"><h3 className="font-bold text-white">{targetUser.pseudo}</h3><div className={`text-xs flex items-center gap-1 ${connection?.status === 'accepted' ? 'text-green-400' : 'text-gray-400'}`}>{statusLabel}</div></div>
       </div>
+      
       <div ref={containerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4 space-y-3 bg-black/20 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
         {isLoadingMore && <div className="flex justify-center py-2"><Loader2 className="animate-spin text-philo-primary w-5 h-5" /></div>}
         {!hasMore && messages.length > 0 && <div className="text-center text-gray-500 text-xs py-4 opacity-50">— Début de l'historique —</div>}
-        {messages.length === 0 && !hasMore && (<div className="text-center text-gray-500 text-sm mt-10 p-4">{!connection ? "Envoyer un message créera automatiquement une demande de lien." : "Aucun message."}</div>)}
-        {messages.map((msg) => {
-          const isMe = msg.sender_id === currentUser.id
-          const isEditing = editingId === msg.id
-          return (
-            <div key={msg.id} className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-[85%] relative ${isEditing ? 'w-full' : ''}`}>
-                {isEditing ? (
-                  <div className="flex gap-2 w-full"><input autoFocus type="text" value={editText} onChange={(e) => setEditText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveEdit()} className="flex-1 bg-black/50 border border-philo-primary rounded-xl px-3 py-2 text-sm text-white outline-none" /><button onClick={saveEdit} className="p-2 bg-green-500/20 text-green-400 rounded-full hover:bg-green-500/40"><Check size={14}/></button><button onClick={cancelEdit} className="p-2 bg-red-500/20 text-red-400 rounded-full hover:bg-red-500/40"><X size={14}/></button></div>
-                ) : (
-                  <div className={`p-3 rounded-2xl text-sm break-words relative ${isMe ? 'bg-philo-primary text-white rounded-tr-none' : 'bg-white/10 text-gray-200 rounded-tl-none'}`}>{msg.content}<MessageTimer createdAt={msg.created_at} currentTick={now} /></div>
-                )}
-                {isMe && !isEditing && (<div className="absolute top-0 -left-16 h-full flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity px-2"><button onClick={() => startEdit(msg)} className="p-1.5 bg-slate-800 text-gray-400 hover:text-white rounded-full hover:bg-white/10"><Pencil size={12} /></button><button onClick={() => handleDelete(msg.id)} className="p-1.5 bg-slate-800 text-red-400 hover:text-red-300 rounded-full hover:bg-red-900/30"><Trash2 size={12} /></button></div>)}
-              </div>
+        
+        {/* --- 3. AFFICHAGE DES RECOMMANDATIONS (SI VIDE) --- */}
+        {messages.length === 0 && !hasMore ? (
+            <div className="h-full flex flex-col items-center justify-center p-6 space-y-6">
+                <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center mb-2 animate-bounce-slow">
+                    <Sparkles className="text-philo-primary" size={32} />
+                </div>
+                <div className="text-center space-y-2 max-w-xs">
+                    <h4 className="text-white font-bold text-lg">C'est le début !</h4>
+                    <p className="text-gray-400 text-xs">Brise la glace avec {targetUser.pseudo}. Voici quelques idées :</p>
+                </div>
+                
+                <div className="flex flex-col gap-2 w-full max-w-sm">
+                    {suggestions.map((text, idx) => (
+                        <button 
+                            key={idx}
+                            onClick={() => sendMessage(null, text)}
+                            className="text-left text-xs md:text-sm p-3 bg-white/5 hover:bg-philo-primary/20 border border-white/10 hover:border-philo-primary/50 text-gray-200 hover:text-white rounded-xl transition-all active:scale-95"
+                        >
+                            {text}
+                        </button>
+                    ))}
+                </div>
             </div>
-          )
-        })}
+        ) : (
+            messages.map((msg) => {
+              const isMe = msg.sender_id === currentUser.id
+              const isEditing = editingId === msg.id
+              return (
+                <div key={msg.id} className={`group flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                  <div className={`max-w-[85%] relative ${isEditing ? 'w-full' : ''}`}>
+                    {isEditing ? (
+                      <div className="flex gap-2 w-full"><input autoFocus type="text" value={editText} onChange={(e) => setEditText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && saveEdit()} className="flex-1 bg-black/50 border border-philo-primary rounded-xl px-3 py-2 text-sm text-white outline-none" /><button onClick={saveEdit} className="p-2 bg-green-500/20 text-green-400 rounded-full hover:bg-green-500/40"><Check size={14}/></button><button onClick={cancelEdit} className="p-2 bg-red-500/20 text-red-400 rounded-full hover:bg-red-500/40"><X size={14}/></button></div>
+                    ) : (
+                      <div className={`p-3 rounded-2xl text-sm break-words relative ${isMe ? 'bg-philo-primary text-white rounded-tr-none' : 'bg-white/10 text-gray-200 rounded-tl-none'}`}>{msg.content}<MessageTimer createdAt={msg.created_at} currentTick={now} /></div>
+                    )}
+                    {isMe && !isEditing && (<div className="absolute top-0 -left-16 h-full flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity px-2"><button onClick={() => startEdit(msg)} className="p-1.5 bg-slate-800 text-gray-400 hover:text-white rounded-full hover:bg-white/10"><Pencil size={12} /></button><button onClick={() => handleDelete(msg.id)} className="p-1.5 bg-slate-800 text-red-400 hover:text-red-300 rounded-full hover:bg-red-900/30"><Trash2 size={12} /></button></div>)}
+                  </div>
+                </div>
+              )
+            })
+        )}
+        
         {isRemoteTyping && <div className="flex justify-start"><TypingIndicator /></div>}
         <div ref={messagesEndRef} />
       </div>
+      
       <div className="p-3 bg-slate-800 border-t border-white/10 flex gap-2 items-end relative">
         {showEmojiPicker && (<div className="absolute bottom-16 left-2 z-50 shadow-2xl rounded-2xl overflow-hidden border border-white/10"><EmojiPicker onEmojiClick={onEmojiClick} theme="dark" width={300} height={400} lazyLoadEmojis={true} /></div>)}
         <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className={`p-3 rounded-full transition ${showEmojiPicker ? 'bg-philo-primary text-white' : 'bg-black/30 text-gray-400 hover:text-white'}`}><Smile size={20} /></button>
-        <form onSubmit={sendMessage} className="flex-1 flex gap-2"><input type="text" value={inputText} onChange={handleTyping} disabled={!canChat} placeholder={!canChat ? "En attente d'acceptation..." : "Ton message..."} className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none disabled:opacity-50 disabled:cursor-not-allowed" /><button disabled={!inputText.trim() || !canChat} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50"><Send size={18} /></button></form>
+        <form onSubmit={(e) => sendMessage(e)} className="flex-1 flex gap-2"><input type="text" value={inputText} onChange={handleTyping} disabled={!canChat} placeholder={!canChat ? "En attente d'acceptation..." : "Ton message..."} className="flex-1 bg-black/30 border border-white/10 rounded-full px-4 py-2 text-sm text-white focus:border-philo-primary outline-none disabled:opacity-50 disabled:cursor-not-allowed" /><button disabled={!inputText.trim() || !canChat} type="submit" className="p-3 bg-philo-primary hover:bg-philo-secondary rounded-full text-white transition disabled:opacity-50"><Send size={18} /></button></form>
       </div>
     </div>
   )
