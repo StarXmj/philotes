@@ -215,6 +215,8 @@ export default function RandomChatMode() {
 
   // --- CONFIGURATION WEBRTC ---
   // --- CONFIGURATION WEBRTC ROBUSTE ---
+  // --- DANS src/pages/RandomChatMode.jsx ---
+
   const setupWebRTC = (roomId) => {
       console.log("🛠️ Setup WebRTC pour Room:", roomId)
       setStatus('connecting')
@@ -225,36 +227,41 @@ export default function RandomChatMode() {
           return
       }
 
-      // Si une connexion existe déjà, on la ferme proprement avant d'en créer une nouvelle
-      if (peerConnection.current) {
-          console.warn("⚠️ Fermeture de l'ancienne connexion avant nouvelle tentative")
-          peerConnection.current.close()
+      // VÉRIFICATION : Est-ce que mes pistes sont actives ?
+      const videoTrack = stream.getVideoTracks()[0]
+      if (videoTrack && videoTrack.readyState === 'ended') {
+          console.error("❌ ERREUR CRITIQUE : La caméra locale est coupée (ended). Relancez la page.")
+          // On pourrait tenter de redemander l'accès ici
+          return
       }
 
       const pc = new RTCPeerConnection(RTC_CONFIG)
       peerConnection.current = pc
 
-      // Surveillance de l'état de la connexion (Diagnostic)
-      pc.oniceconnectionstatechange = () => {
-          console.log("🧊 État Connexion ICE:", pc.iceConnectionState)
-          if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-              console.error("❌ La connexion P2P a échoué ou a été coupée.")
-              setStatus('search') // On pourrait relancer une recherche ici
+      // Ajout des pistes
+      stream.getTracks().forEach(track => {
+          if (track.readyState === 'live') {
+              pc.addTrack(track, stream)
+          } else {
+              console.warn("⚠️ Piste locale inactive ignorée:", track.kind)
+          }
+      })
+
+      // Réception
+      pc.ontrack = (event) => {
+          console.log("🎥 Flux distant reçu (ontrack)", event.streams[0])
+          if (event.streams && event.streams[0]) {
+              setRemoteStream(event.streams[0])
+              setStatus('connected')
           }
       }
 
-      // Ajout des pistes locales
-      stream.getTracks().forEach(track => pc.addTrack(track, stream))
-
-      // Réception des pistes distantes
-      pc.ontrack = (event) => {
-          console.log("🎥 Flux distant détecté (Event):", event)
-          if (event.streams && event.streams[0]) {
-              console.log("✅ Flux distant valide reçu, ID:", event.streams[0].id)
-              setRemoteStream(event.streams[0])
-              setStatus('connected')
-          } else {
-              console.warn("⚠️ Event ontrack reçu sans stream associé !")
+      // Surveillance état ICE
+      pc.oniceconnectionstatechange = () => {
+          console.log("🧊 État ICE:", pc.iceConnectionState)
+          if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+              // Si on est en 4G, c'est ici que ça va échouer
+              console.error("❌ Échec connexion P2P (Probablement un pare-feu/4G)")
           }
       }
 
