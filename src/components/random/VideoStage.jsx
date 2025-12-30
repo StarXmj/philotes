@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { User, Mic, Video as VideoIcon } from 'lucide-react' // Renommé pour éviter conflit
+import { User, Mic, Video as VideoIcon } from 'lucide-react'
 
 export default function VideoStage({ localStream, remoteStream, isSearching }) {
   const localVideoRef = useRef(null)
@@ -12,69 +12,88 @@ export default function VideoStage({ localStream, remoteStream, isSearching }) {
     }
   }, [localStream])
 
-  // Gestion du FLUX DISTANT (Le correctif est ici)
+  // Gestion du FLUX DISTANT (Version Robuste)
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      console.log("📺 Tentative d'affichage du flux distant...", remoteStream)
+    const videoEl = remoteVideoRef.current
+    if (videoEl && remoteStream) {
+      console.log("📺 Mise à jour de la source vidéo distante...", remoteStream.id)
       
-      // On attache le flux
-      remoteVideoRef.current.srcObject = remoteStream
+      // 1. Assigner le stream
+      videoEl.srcObject = remoteStream
       
-      // On force la lecture (contournement sécurité navigateur)
-      remoteVideoRef.current.play().catch(e => console.error("Erreur lecture auto vidéo distante:", e))
+      // 2. Fonction pour lancer la lecture de force
+      const handlePlay = async () => {
+          try {
+              await videoEl.play()
+              console.log("▶️ Lecture vidéo lancée avec succès")
+          } catch (err) {
+              console.error("❌ Erreur lecture vidéo (Autoplay bloqué ?):", err)
+          }
+      }
 
-      // Debug : Vérifier si on a bien de la vidéo
-      const videoTracks = remoteStream.getVideoTracks()
-      if (videoTracks.length > 0) {
-          console.log(`✅ ${videoTracks.length} piste(s) vidéo détectée(s), Statut: ${videoTracks[0].enabled ? 'Activé' : 'Désactivé'}`)
-      } else {
-          console.warn("⚠️ Aucune piste vidéo dans le flux distant !")
+      // 3. Attendre que les métadonnées soient chargées avant de jouer
+      videoEl.onloadedmetadata = handlePlay
+      
+      // Fallback : essayer de jouer tout de suite au cas où
+      handlePlay()
+
+      // Debug Tracks
+      const tracks = remoteStream.getVideoTracks()
+      if (tracks.length > 0) {
+          console.log(`info Piste vidéo: ${tracks[0].label}, Enabled: ${tracks[0].enabled}, Muted: ${tracks[0].muted}`)
+          // Si la piste est "muted", c'est souvent un problème réseau (pas de données reçues)
+          tracks[0].onunmute = () => console.log("✅ Piste vidéo unmuted (données reçues)")
+          tracks[0].onmute = () => console.warn("⚠️ Piste vidéo muted (plus de données)")
       }
     }
   }, [remoteStream])
 
   return (
     <div className="relative w-full h-full flex flex-col gap-4 p-4">
-      {/* REMOTE VIDEO (PRINCIPALE) */}
+      
+      {/* REMOTE VIDEO */}
       <div className="flex-1 relative bg-black rounded-3xl overflow-hidden border border-white/10 shadow-2xl">
         {isSearching ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/80 backdrop-blur-sm z-20">
             <div className="w-24 h-24 border-4 border-philo-primary border-t-transparent rounded-full animate-spin mb-4"/>
             <p className="text-white font-bold animate-pulse">Recherche d'un étudiant...</p>
           </div>
-        ) : remoteStream ? (
-          // AJOUT DE 'key' pour forcer le re-rendu si le stream change
+        ) : (
+          /* Ajout de playsInline, autoPlay et key pour forcer le refresh */
           <video 
-            key={remoteStream.id} 
             ref={remoteVideoRef} 
+            key={remoteStream ? remoteStream.id : 'no-stream'}
             autoPlay 
             playsInline 
-            className="w-full h-full object-cover" 
+            className="w-full h-full object-cover bg-black"
           />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
-            <div className="text-center">
-                <User size={64} className="text-gray-600 mx-auto mb-2" />
-                <p className="text-gray-500 text-sm">En attente de vidéo...</p>
-            </div>
-          </div>
+        )}
+
+        {/* Placeholder si pas de vidéo active */}
+        {!remoteStream && !isSearching && (
+             <div className="absolute inset-0 flex items-center justify-center bg-slate-900 z-10">
+                <div className="text-center opacity-50">
+                    <User size={64} className="mx-auto mb-2"/>
+                    <p>En attente de connexion vidéo...</p>
+                </div>
+             </div>
         )}
         
-        {/* LOCAL VIDEO (PIP - Picture in Picture) */}
+        {/* LOCAL VIDEO (PIP) */}
         {localStream && (
-            <div className="absolute bottom-4 right-4 w-32 h-48 md:w-48 md:h-32 bg-slate-800 rounded-xl overflow-hidden border-2 border-white/20 shadow-lg z-10">
+            <div className="absolute bottom-4 right-4 w-32 h-48 md:w-48 md:h-32 bg-slate-800 rounded-xl overflow-hidden border-2 border-white/20 shadow-lg z-30">
                 <video 
                     ref={localVideoRef} 
                     autoPlay 
                     playsInline 
-                    muted // Toujours mute sa propre vidéo sinon larsen !
+                    muted 
                     className="w-full h-full object-cover transform scale-x-[-1]" 
                 />
             </div>
         )}
       </div>
 
-      {/* CONTROLS BAR */}
+      {/* CONTROLS */}
       <div className="h-16 bg-slate-900/80 backdrop-blur rounded-2xl flex items-center justify-center gap-6 border border-white/5">
          <button className="p-3 bg-white/10 rounded-full hover:bg-white/20"><Mic size={20} className="text-white"/></button>
          <button className="p-3 bg-white/10 rounded-full hover:bg-white/20"><VideoIcon size={20} className="text-white"/></button>

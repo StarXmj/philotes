@@ -214,6 +214,7 @@ export default function RandomChatMode() {
   }
 
   // --- CONFIGURATION WEBRTC ---
+  // --- CONFIGURATION WEBRTC ROBUSTE ---
   const setupWebRTC = (roomId) => {
       console.log("🛠️ Setup WebRTC pour Room:", roomId)
       setStatus('connecting')
@@ -224,15 +225,37 @@ export default function RandomChatMode() {
           return
       }
 
+      // Si une connexion existe déjà, on la ferme proprement avant d'en créer une nouvelle
+      if (peerConnection.current) {
+          console.warn("⚠️ Fermeture de l'ancienne connexion avant nouvelle tentative")
+          peerConnection.current.close()
+      }
+
       const pc = new RTCPeerConnection(RTC_CONFIG)
       peerConnection.current = pc
 
+      // Surveillance de l'état de la connexion (Diagnostic)
+      pc.oniceconnectionstatechange = () => {
+          console.log("🧊 État Connexion ICE:", pc.iceConnectionState)
+          if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+              console.error("❌ La connexion P2P a échoué ou a été coupée.")
+              setStatus('search') // On pourrait relancer une recherche ici
+          }
+      }
+
+      // Ajout des pistes locales
       stream.getTracks().forEach(track => pc.addTrack(track, stream))
 
+      // Réception des pistes distantes
       pc.ontrack = (event) => {
-          console.log("🎥 Flux distant reçu !")
-          setRemoteStream(event.streams[0])
-          setStatus('connected')
+          console.log("🎥 Flux distant détecté (Event):", event)
+          if (event.streams && event.streams[0]) {
+              console.log("✅ Flux distant valide reçu, ID:", event.streams[0].id)
+              setRemoteStream(event.streams[0])
+              setStatus('connected')
+          } else {
+              console.warn("⚠️ Event ontrack reçu sans stream associé !")
+          }
       }
 
       pc.onicecandidate = (event) => {
