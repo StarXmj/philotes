@@ -7,7 +7,6 @@ import RandomWarningModal from '../components/random/RandomWarningModal'
 import VideoStage from '../components/random/VideoStage'
 import DashboardFilters from '../components/dashboard/DashboardFilters'
 
-// Configuration STUN (Gratuit - Google) pour passer à travers les pare-feux simples
 const RTC_CONFIG = {
     iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
 }
@@ -18,16 +17,17 @@ export default function RandomChatMode() {
   
   // UI States
   const [hasAcceptedRules, setHasAcceptedRules] = useState(false)
-  const [status, setStatus] = useState('idle') // idle, searching, connecting, connected
+  const [status, setStatus] = useState('idle') 
   const [messages, setMessages] = useState([])
   const [inputText, setInputText] = useState('')
+  const [isChannelReady, setIsChannelReady] = useState(false) // NOUVEAU : On attend que le canal soit prêt
   
   // Video States
   const [localStream, setLocalStream] = useState(null)
   const [remoteStream, setRemoteStream] = useState(null)
   
-  // Refs pour WebRTC et Logique (Synchrones)
-  const localStreamRef = useRef(null) // <--- FIX: Ref pour accès immédiat au stream
+  // Refs
+  const localStreamRef = useRef(null)
   const peerConnection = useRef(null)
   const signalingChannel = useRef(null)
   const currentRoomId = useRef(null)
@@ -40,24 +40,109 @@ export default function RandomChatMode() {
   const [showFriends, setShowFriends] = useState(false) 
   const [onlyFriends, setOnlyFriends] = useState(false)
 
-  // 1. Démarrage Caméra
+  // 1. INITIALISATION DU CANAL DE SIGNALISATION (Dès le début)
   useEffect(() => {
-    if (hasAcceptedRules && !localStream) {
+      const channel = supabase.channel('random-signaling')
+      
+      channel
+        .on('broadcast', { event: 'signal' }, handleSignalMessage)
+        .on('broadcast', { event: 'chat' }, handleChatMessage)
+        .subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log("✅ Canal de signalisation prêt")
+                signalingChannel.current = channel
+                setIsChannelReady(true)
+            }
+        })
+
+      return () => {
+          supabase.removeChannel(channel)
+          signalingChannel.current = null
+      }
+  }, [])
+
+  // 2. Démarrage Caméra (Seulement quand le canal est prêt)
+  useEffect(() => {
+    if (hasAcceptedRules && isChannelReady && !localStream) {
         navigator.mediaDevices.getUserMedia({ video: true, audio: true })
             .then(stream => {
-                // On met à jour la REF (immédiat) et le STATE (pour l'affichage)
                 localStreamRef.current = stream 
                 setLocalStream(stream)
-                startSearch() // Maintenant startSearch pourra utiliser la ref
+                startSearch() 
             })
             .catch(err => {
                 console.error("Erreur caméra:", err)
-                alert("Impossible d'accéder à la caméra. Vérifiez vos permissions.")
+                alert("Impossible d'accéder à la caméra.")
                 navigate('/app')
             })
     }
-    return () => cleanupConnection() // Nettoyage si on quitte
-  }, [hasAcceptedRules])
+    // Pas de cleanup ici pour éviter de couper la cam entre deux skips
+  }, [hasAcceptedRules, isChannelReady])
+
+  // Nettoyage final quand on quitte le composant
+  useEffect(() => {
+      return () => cleanupConnection(true)
+  }, [])
+
+  // --- LOGIQUE DE SIGNALISATION (Réception) ---
+  const handleSignalMessage = async (payload) => {
+      const data = payload.payload
+      if (!data) return
+
+      // Si je suis en attente et que je reçois une OFFRE qui m'est destinée
+      if (!peerConnection.current && !isInitiator.current && data.target === user.id && data.type === 'offer') {
+          console.log("📞 Appel reçu ! ID Room :", data.roomId)
+          
+          // On supprime notre entrée de la file d'attente (nettoyage)
+          await supabase.from('random_queue').delete().eq('user_id', user.id)
+          
+          currentRoomId.current = data.roomId
+          setupWebRTC(data.roomId)
+          
+          if (!peerConnection.current) return
+
+          await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.sdp))
+          const answer = await peerConnection.current.createAnswer()
+          await peerConnection.current.setLocalDescription(answer)
+          
+          sendMessageSignal({ type: 'answer', sdp: answer, roomId: currentRoomId.current })
+      }
+      
+      // Gestion des messages suivants (Answer, ICE) pour la room actuelle
+      if (peerConnection.current && data.roomId === currentRoomId.current) {
+          try {
+            if (data.type === 'answer' && isInitiator.current) {
+                await peerConnection.current.setRemoteDescription(new RTCSessionDescription(data.sdp))
+            }
+            else if (data.type === 'ice-candidate' && peerConnection.current.remoteDescription) {
+                await peerConnection.current.addIceCandidate(new RTCIceCandidate(data.candidate))
+            }
+          } catch (e) {
+              console.error("Erreur WebRTC Signal:", e)
+          }
+      }
+  }
+
+  const handleChatMessage = (payload) => {
+      if (payload.payload && payload.payload.roomId === currentRoomId.current) {
+          setMessages(prev => [...prev, { id: Date.now(), text: payload.payload.text, isMe: false }])
+      }
+  }
+
+  // Envoi sécurisé (uniquement si canal prêt)
+  const sendMessageSignal = async (data) => {
+      if (!signalingChannel.current) {
+          console.error("❌ Erreur : Canal non prêt pour l'envoi")
+          return
+      }
+      // target: null = broadcast à tout le monde (pour trouver le partenaire)
+      // En prod, on ciblerait un user spécifique.
+      await signalingChannel.current.send({ 
+          type: 'broadcast', 
+          event: 'signal', 
+          payload: { ...data, sender: user.id } 
+      })
+  }
 
   // --- LOGIQUE DE MATCHING ---
 
@@ -65,32 +150,42 @@ export default function RandomChatMode() {
       setStatus('searching')
       setMessages([])
       setRemoteStream(null)
-      // On ne coupe pas le flux local ici (false), on le garde pour le prochain appel
-      cleanupConnection(false) 
+      cleanupConnection(false) // On garde la cam
+
+      console.log("🔍 Recherche de partenaire...")
 
       try {
           // A. Regarder s'il y a quelqu'un dans la file
           const { data: waitingUsers } = await supabase
               .from('random_queue')
               .select('*')
-              .neq('user_id', user.id)
-              .order('created_at', { ascending: true })
+              .neq('user_id', user.id) // Pas moi-même
+              .order('created_at', { ascending: true }) // Le plus ancien
               .limit(1)
 
           if (waitingUsers && waitingUsers.length > 0) {
               const partner = waitingUsers[0]
+              
+              // TENTATIVE DE RÉSERVATION (DELETE ATOMIC)
               const { error: deleteError } = await supabase
                   .from('random_queue')
                   .delete()
                   .eq('id', partner.id)
 
               if (!deleteError) {
+                  console.log("✅ Partenaire trouvé :", partner.user_id)
                   initiateCall(partner.user_id)
               } else {
-                  setTimeout(startSearch, 500)
+                  console.log("⚠️ Partenaire déjà pris, on réessaie...")
+                  setTimeout(startSearch, 500) // Retry
               }
           } else {
+              // Personne -> Je m'ajoute
+              console.log("⏳ Personne en vue, je m'ajoute à la file.")
+              // D'abord on nettoie au cas où on y est déjà
+              await supabase.from('random_queue').delete().eq('user_id', user.id)
               await supabase.from('random_queue').insert({ user_id: user.id })
+              
               waitForCall()
           }
       } catch (error) {
@@ -98,99 +193,44 @@ export default function RandomChatMode() {
       }
   }
 
-  // Cas 1 : JE SUIS L'INITIATEUR
   const initiateCall = async (partnerId) => {
       isInitiator.current = true
       currentRoomId.current = `room_${user.id}_${partnerId}`
-      setupWebRTC(currentRoomId.current) // <--- C'est ici que ça plantait
+      setupWebRTC(currentRoomId.current)
       
       if (!peerConnection.current) return
 
       const offer = await peerConnection.current.createOffer()
       await peerConnection.current.setLocalDescription(offer)
 
-      sendMessageSignal({ type: 'offer', sdp: offer, roomId: currentRoomId.current })
+      console.log("📤 Envoi de l'offre à", partnerId)
+      // On envoie l'offre en ciblant spécifiquement l'ID du partenaire
+      sendMessageSignal({ type: 'offer', sdp: offer, roomId: currentRoomId.current, target: partnerId })
   }
 
-  // Cas 2 : J'ATTENDS UN APPEL
   const waitForCall = () => {
       isInitiator.current = false
-      subscribeToSignaling()
+      setStatus('waiting')
   }
 
-  // --- SIGNALISATION ---
-  const subscribeToSignaling = () => {
-      signalingChannel.current = supabase.channel('random-signaling')
-      
-      signalingChannel.current
-        .on('broadcast', { event: 'signal' }, async (payload) => {
-            // Sécurité : Vérifier si le payload est valide
-            if (!payload.payload) return
-
-            if (!peerConnection.current && !isInitiator.current && payload.payload.target === user.id && payload.payload.type === 'offer') {
-                await supabase.from('random_queue').delete().eq('user_id', user.id)
-                
-                currentRoomId.current = payload.payload.roomId
-                setupWebRTC(currentRoomId.current)
-                
-                if (!peerConnection.current) return
-
-                await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.payload.sdp))
-                const answer = await peerConnection.current.createAnswer()
-                await peerConnection.current.setLocalDescription(answer)
-                
-                sendMessageSignal({ type: 'answer', sdp: answer, roomId: currentRoomId.current })
-            }
-            
-            if (peerConnection.current && payload.payload.roomId === currentRoomId.current) {
-                if (payload.payload.type === 'answer' && isInitiator.current) {
-                    await peerConnection.current.setRemoteDescription(new RTCSessionDescription(payload.payload.sdp))
-                }
-                if (payload.payload.type === 'ice-candidate' && peerConnection.current.remoteDescription) {
-                    try {
-                        await peerConnection.current.addIceCandidate(new RTCIceCandidate(payload.payload.candidate))
-                    } catch (e) { console.error("Erreur ICE", e) }
-                }
-            }
-        })
-        .subscribe()
-  }
-
-  const sendMessageSignal = async (data) => {
-      const channel = signalingChannel.current || supabase.channel('random-signaling')
-      
-      if (!signalingChannel.current) {
-          signalingChannel.current = channel
-          channel.subscribe((status) => {
-              if (status === 'SUBSCRIBED') {
-                 channel.send({ type: 'broadcast', event: 'signal', payload: { ...data, target: null } })
-              }
-          })
-      } else {
-          channel.send({ type: 'broadcast', event: 'signal', payload: { ...data } })
-      }
-  }
-
-  // --- CONFIGURATION WEBRTC (CORRIGÉE AVEC REF) ---
+  // --- CONFIGURATION WEBRTC ---
   const setupWebRTC = (roomId) => {
+      console.log("🛠️ Setup WebRTC pour Room:", roomId)
       setStatus('connecting')
       
-      // FIX: On utilise la REF, pas le STATE
       const stream = localStreamRef.current
       if (!stream) {
-          console.error("Erreur critique: Pas de flux local disponible pour WebRTC")
-          // On peut tenter de relancer la caméra ou annuler
-          setStatus('idle')
+          console.error("❌ Pas de flux local !")
           return
       }
 
       const pc = new RTCPeerConnection(RTC_CONFIG)
       peerConnection.current = pc
 
-      // Ajout des pistes (Tracks)
       stream.getTracks().forEach(track => pc.addTrack(track, stream))
 
       pc.ontrack = (event) => {
+          console.log("🎥 Flux distant reçu !")
           setRemoteStream(event.streams[0])
           setStatus('connected')
       }
@@ -207,13 +247,10 @@ export default function RandomChatMode() {
           peerConnection.current.close()
           peerConnection.current = null
       }
-      if (signalingChannel.current) {
-          supabase.removeChannel(signalingChannel.current)
-          signalingChannel.current = null
-      }
+      // On NE coupe PAS le canal de signalisation ici, il est global
+      
       if (user) supabase.from('random_queue').delete().eq('user_id', user.id).then()
       
-      // FIX: On utilise la REF pour couper les pistes proprement
       if (stopLocal && localStreamRef.current) {
           localStreamRef.current.getTracks().forEach(track => track.stop())
           localStreamRef.current = null
@@ -224,49 +261,37 @@ export default function RandomChatMode() {
   // --- ACTIONS UI ---
 
   const handleSkip = () => {
-      cleanupConnection(false) // On garde la cam
+      cleanupConnection(false)
       startSearch()
   }
 
   const handleQuit = () => {
       if (window.confirm("Quitter le mode aléatoire ?")) {
-          cleanupConnection(true) // On coupe tout
+          cleanupConnection(true)
           navigate('/app')
       }
   }
 
   const sendChatMessage = (e) => {
       e.preventDefault()
-      if (!inputText.trim()) return
+      if (!inputText.trim() || !signalingChannel.current) return
+      
       setMessages(prev => [...prev, { id: Date.now(), text: inputText, isMe: true }])
       
-      if (signalingChannel.current) {
-          signalingChannel.current.send({ 
-              type: 'broadcast', 
-              event: 'chat', 
-              payload: { text: inputText, roomId: currentRoomId.current } 
-          })
-      }
+      signalingChannel.current.send({ 
+          type: 'broadcast', 
+          event: 'chat', 
+          payload: { text: inputText, roomId: currentRoomId.current } 
+      })
       setInputText('')
   }
-  
-  useEffect(() => {
-      if (signalingChannel.current) {
-          signalingChannel.current.on('broadcast', { event: 'chat' }, (payload) => {
-              if (payload.payload && payload.payload.roomId === currentRoomId.current) {
-                  setMessages(prev => [...prev, { id: Date.now(), text: payload.payload.text, isMe: false }])
-              }
-          })
-      }
-  }, [status])
-
 
   if (!hasAcceptedRules) return <RandomWarningModal onAccept={() => setHasAcceptedRules(true)} onCancel={() => navigate('/app')} />
 
   return (
     <div className="h-screen w-full bg-black text-white flex overflow-hidden">
       
-      {/* GAUCHE : FILTRES */}
+      {/* GAUCHE */}
       <div className="w-72 bg-slate-900 border-r border-white/5 flex-col hidden md:flex">
         <div className="p-4 border-b border-white/10 flex items-center gap-2">
             <button onClick={handleQuit} className="p-2 hover:bg-white/10 rounded-full text-gray-400 hover:text-white transition"><ArrowLeft size={20}/></button>
@@ -286,13 +311,14 @@ export default function RandomChatMode() {
         </div>
       </div>
 
-      {/* CENTRE : VIDÉO */}
+      {/* CENTRE */}
       <div className="flex-1 relative flex flex-col">
          <div className="md:hidden absolute top-4 left-4 z-50">
             <button onClick={handleQuit} className="p-3 bg-black/50 backdrop-blur-md rounded-full text-white border border-white/10"><ArrowLeft/></button>
          </div>
 
-         <VideoStage localStream={localStream} remoteStream={remoteStream} isSearching={status === 'searching'} />
+         {/* Note: status === 'waiting' signifie qu'on attend un appel, donc on affiche recherche */}
+         <VideoStage localStream={localStream} remoteStream={remoteStream} isSearching={status === 'searching' || status === 'waiting' || status === 'connecting'} />
 
          <div className="h-24 bg-slate-900 border-t border-white/10 flex items-center justify-center gap-4 px-6 relative z-10">
              <button className="p-4 rounded-full bg-slate-800 text-red-500 hover:bg-red-500/10 border border-red-500/20 active:scale-95 transition" title="Signaler"><Flag size={24}/></button>
@@ -300,16 +326,16 @@ export default function RandomChatMode() {
                 onClick={handleSkip} 
                 className="flex-1 max-w-md py-4 bg-white text-black font-black text-xl rounded-full hover:scale-105 active:scale-95 transition-transform shadow-[0_0_30px_rgba(255,255,255,0.3)] flex items-center justify-center gap-3"
              >
-                {status === 'searching' ? <><Loader2 className="animate-spin"/> Recherche...</> : <>SKIP <SkipForward fill="black" size={24}/></>}
+                {(status === 'searching' || status === 'waiting') ? <><Loader2 className="animate-spin"/> Recherche...</> : <>SKIP <SkipForward fill="black" size={24}/></>}
              </button>
          </div>
       </div>
 
-      {/* DROITE : CHAT */}
+      {/* DROITE */}
       <div className="w-80 bg-slate-900 border-l border-white/5 flex flex-col hidden lg:flex">
          <div className="p-4 border-b border-white/10 bg-slate-800/50">
              <h3 className="font-bold text-center text-gray-300">Chat Anonyme</h3>
-             <p className="text-[10px] text-center text-gray-500">{status === 'connected' ? "Connecté !" : "En attente..."}</p>
+             <p className="text-[10px] text-center text-gray-500">{status === 'connected' ? "Connecté !" : "En recherche..."}</p>
          </div>
 
          <div className="flex-1 overflow-y-auto p-4 space-y-3">
