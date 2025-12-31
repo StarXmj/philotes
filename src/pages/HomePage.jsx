@@ -1,4 +1,3 @@
-// src/pages/HomePage.jsx
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
@@ -9,9 +8,22 @@ export default function HomePage() {
   const navigate = useNavigate()
   const { user } = useAuth()
 
-  // Si déjà connecté, on file direct au Dashboard
   useEffect(() => {
-    if (user) navigate('/app')
+    // 1. Si déjà connecté -> Dashboard direct
+    if (user) {
+        navigate('/app')
+        return
+    }
+
+    // 2. DÉTECTION PWA (Mode App installée)
+    // Si l'utilisateur est sur l'application installée, on saute la vitrine marketing
+    // et on l'envoie direct sur l'écran de connexion/inscription.
+    const isPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    
+    if (isPWA) {
+        navigate('/auth')
+    }
+
   }, [user, navigate])
 
   return (
@@ -37,17 +49,15 @@ export default function HomePage() {
       {/* --- HERO SECTION --- */}
       <main className="relative z-10 flex flex-col items-center justify-center min-h-[80vh] text-center px-4">
         
-        {/* Badge */}
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6 }}
           className="mb-6 px-4 py-1.5 rounded-full border border-philo-primary/30 bg-philo-primary/10 text-philo-primary text-xs font-bold uppercase tracking-widest flex items-center gap-2"
         >
-          <Sparkles size={14} /> Là où naissent les émotions fortes
+          <Sparkles size={14} /> Le Réseau Social Étudiant 2.0
         </motion.div>
 
-        {/* Grand Titre */}
         <motion.h1 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -60,17 +70,15 @@ export default function HomePage() {
           </span>
         </motion.h1>
 
-        {/* Sous-titre */}
         <motion.p 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.4 }}
           className="text-gray-400 text-lg md:text-xl max-w-2xl mb-12 leading-relaxed"
         >
-          Arrête le swipe superficiel. Explore les étudiants autour de toi dans une constellation sociale, où chaque connexion se révèle à travers ta personnalité, tes passions et ton énergie unique.
+          Fini le swipe superficiel. Découvre les étudiants autour de toi sous forme de <span className="text-white font-medium">constellation 3D</span> basée sur ta personnalité, tes études et tes vibes.
         </motion.p>
 
-        {/* --- LE BOUTON CENTRAL (CTA) --- */}
         <motion.div
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -87,33 +95,19 @@ export default function HomePage() {
           </button>
         </motion.div>
 
-        {/* --- 3 POINTS FORTS (ICONIQUE) --- */}
         <motion.div 
            initial={{ opacity: 0 }}
            animate={{ opacity: 1 }}
            transition={{ duration: 1, delay: 1 }}
            className="mt-24 grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl w-full text-left"
         >
-            <FeatureCard 
-                icon={<Globe className="text-blue-400" />}
-                title="Constellation 3D"
-                desc="Visualise ton campus comme une galaxie. Plus tu es proche, plus ça matche."
-            />
-            <FeatureCard 
-                icon={<BrainCircuit className="text-purple-400" />}
-                title="Match par Vibes"
-                desc="Un algorithme qui connecte les personnalités, pas juste les visages."
-            />
-            <FeatureCard 
-                icon={<Users className="text-pink-400" />}
-                title="100% Étudiants"
-                desc="Un réseau sécurisé et exclusif, vérifié par ton email universitaire."
-            />
+            <FeatureCard icon={<Globe className="text-blue-400" />} title="Constellation 3D" desc="Visualise ton campus comme une galaxie. Plus tu es proche, plus ça matche." />
+            <FeatureCard icon={<BrainCircuit className="text-purple-400" />} title="Match par Vibes" desc="Un algorithme qui connecte les personnalités, pas juste les visages." />
+            <FeatureCard icon={<Users className="text-pink-400" />} title="100% Étudiants" desc="Un réseau sécurisé et exclusif, vérifié par ton email universitaire." />
         </motion.div>
 
       </main>
 
-      {/* Footer simple */}
       <footer className="relative z-10 py-6 text-center text-gray-600 text-xs">
         © 2024 Philotès. Connecte-toi à l'essentiel.
       </footer>

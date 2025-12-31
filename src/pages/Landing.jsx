@@ -22,19 +22,22 @@ export default function Landing() {
   const [msg, setMsg] = useState(null)
   const [allowedDomains, setAllowedDomains] = useState([])
 
-  // --- NOUVEAU : Détection PWA ---
+  // États PWA
   const [isPWA, setIsPWA] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState(null)
 
+  // Redirection si connecté
   useEffect(() => {
-    // Vérifier si on est en mode App (Standalone)
-    const checkPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
-    setIsPWA(checkPWA)
-
     if (user) navigate('/app')
   }, [user, navigate])
 
-  // --- LOGIQUE PWA INSTALLATION (Seulement si pas déjà installé) ---
+  // Détection PWA (Est-ce que je suis dans l'app ?)
+  useEffect(() => {
+    const checkPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    setIsPWA(checkPWA)
+  }, [])
+
+  // Capture de l'événement d'installation PWA
   useEffect(() => {
     const handler = (e) => {
       e.preventDefault()
@@ -44,16 +47,7 @@ export default function Landing() {
     return () => window.removeEventListener('beforeinstallprompt', handler)
   }, [])
 
-  const handleInstallClick = async () => {
-    if (!deferredPrompt) {
-      alert("Pour installer sur iOS : Appuyez sur le bouton Partager (carré avec flèche) puis sur 'Sur l'écran d'accueil'.")
-      return
-    }
-    deferredPrompt.prompt()
-    setDeferredPrompt(null)
-  }
-
-  // ... (Fetch Domains & Helpers restent identiques) ...
+  // Chargement domaines autorisés
   useEffect(() => {
     const fetchDomains = async () => {
       try {
@@ -67,6 +61,16 @@ export default function Landing() {
     fetchDomains()
   }, [])
 
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) {
+      alert("Pour installer sur iOS : Appuyez sur le bouton Partager (carré avec flèche) puis sur 'Sur l'écran d'accueil'.")
+      return
+    }
+    deferredPrompt.prompt()
+    setDeferredPrompt(null)
+  }
+
+  // Helpers Auth
   const getPasswordStrength = (pass) => {
     let score = 0; if (!pass) return 0; if (pass.length > 5) score += 1; if (pass.length > 8) score += 1; if (/[0-9]/.test(pass)) score += 1; if (/[^A-Za-z0-9]/.test(pass)) score += 1; return score
   }
@@ -115,9 +119,10 @@ export default function Landing() {
       <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-philo-primary/30 rounded-full blur-[100px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-philo-secondary/20 rounded-full blur-[100px] pointer-events-none" />
 
-      {/* 1. VERSION MOBILE & TABLETTE (< 1024px) -> "TÉLÉCHARGER L'APP"
-          CONDITION : Seulement si on n'est PAS en mode PWA (!isPWA)
-      */}
+      {/* ====================================================================================
+          1. ECRAN "TÉLÉCHARGER L'APP" (Mobile Web uniquement)
+          Condition: Mobile (lg:hidden) ET pas dans l'app (!isPWA)
+      ==================================================================================== */}
       <div className={`${isPWA ? 'hidden' : 'lg:hidden'} flex flex-col items-center justify-center min-h-screen p-6 relative z-10`}>
           <div className="text-center space-y-8 max-w-md mx-auto">
               <h1 className="text-4xl font-bold tracking-tighter">Philotès<span className="text-philo-primary">.</span></h1>
@@ -133,6 +138,7 @@ export default function Landing() {
                   <h2 className="text-3xl font-bold leading-tight">L'expérience Philotès se vit <span className="text-transparent bg-clip-text bg-gradient-to-r from-philo-primary to-purple-400">sur ton mobile.</span></h2>
                   <p className="text-gray-400 text-sm px-4">Pour accéder au chat vidéo, à la constellation 3D et aux rencontres aléatoires, télécharge l'application officielle.</p>
               </div>
+              
               <div className="space-y-3 w-full">
                   <button 
                     onClick={handleInstallClick} 
@@ -149,39 +155,52 @@ export default function Landing() {
           </div>
       </div>
 
-      {/* 2. VERSION FORMULAIRE CONNEXION
-          CONDITION : Visible sur Desktop (lg:flex) OU si on est en mode PWA (isPWA)
-      */}
+      {/* ====================================================================================
+          2. ECRAN "CONNEXION" (Desktop ou App installée)
+          Condition: Desktop (lg:flex) OU Mode App (isPWA)
+      ==================================================================================== */}
       <div className={`${isPWA ? 'flex' : 'hidden lg:flex'} min-h-screen flex-col items-center justify-center relative z-10 px-4`}>
         <motion.div layout initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
             <div className="text-center mb-8">
               <h1 className="text-6xl font-bold text-white mb-2 tracking-tight">Philotès<span className="text-philo-primary">.</span></h1>
-              <p className="text-gray-400 text-lg">{mode === 'login' && "Ravi de te revoir 👋"}{mode === 'signup' && "Rejoins le campus 🚀"}{mode === 'forgot' && "Pas de panique 🔑"}</p>
+              <p className="text-gray-400 text-lg">
+                {mode === 'login' && "Ravi de te revoir 👋"}
+                {mode === 'signup' && "Rejoins le campus 🚀"}
+                {mode === 'forgot' && "Pas de panique 🔑"}
+              </p>
             </div>
+
             <div className="bg-white/5 backdrop-blur-xl p-8 rounded-3xl border border-white/10 shadow-2xl relative overflow-hidden">
+              
+              {/* Onglets Connexion / Inscription */}
               {mode !== 'forgot' && (
                 <div className="flex bg-black/20 rounded-xl p-1 mb-6">
                     <button onClick={() => setMode('login')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'login' ? 'bg-white/10 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}>Connexion</button>
                     <button onClick={() => setMode('signup')} className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${mode === 'signup' ? 'bg-white/10 text-white shadow' : 'text-gray-500 hover:text-gray-300'}`}>Inscription</button>
                 </div>
               )}
+
               {mode === 'forgot' && (
                  <button onClick={() => setMode('login')} className="mb-6 flex items-center gap-2 text-sm text-gray-400 hover:text-white transition"><ArrowLeft size={16} /> Retour</button>
               )}
+
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Mail className="h-5 w-5 text-gray-500" /></div>
                   <input type="email" required placeholder="Email étudiant (@univ...)" className="block w-full pl-10 pr-3 py-3 border border-white/10 rounded-xl bg-black/20 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-philo-primary transition-all" value={email} onChange={(e) => setEmail(e.target.value)} />
                 </div>
+
                 {mode !== 'forgot' && (
                     <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"><Lock className="h-5 w-5 text-gray-500" /></div>
                     <input type="password" required placeholder="Mot de passe" className="block w-full pl-10 pr-3 py-3 border border-white/10 rounded-xl bg-black/20 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-philo-primary transition-all" value={password} onChange={(e) => setPassword(e.target.value)} />
                     </div>
                 )}
+
                 {mode === 'login' && (
                     <div className="flex justify-end"><button type="button" onClick={() => setMode('forgot')} className="text-xs text-philo-primary hover:text-philo-secondary hover:underline transition">Mot de passe oublié ?</button></div>
                 )}
+
                 <AnimatePresence>
                     {mode === 'signup' && (
                     <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="space-y-4 overflow-hidden">
@@ -196,7 +215,9 @@ export default function Landing() {
                     </motion.div>
                     )}
                 </AnimatePresence>
+
                 {error && <div className="text-red-400 text-sm bg-red-400/10 p-3 rounded-lg text-center border border-red-400/20">{error === "Invalid login credentials" ? "Email ou mot de passe incorrect" : error}</div>}
+
                 <button type="submit" disabled={loading} className="w-full flex items-center justify-center py-3 px-4 rounded-xl text-white bg-gradient-to-r from-philo-primary to-philo-secondary hover:opacity-90 transition-all font-bold shadow-lg shadow-philo-primary/25 mt-4">
                   {loading ? <Loader2 className="animate-spin h-5 w-5" /> : (mode === 'login' ? 'Se connecter' : mode === 'signup' ? "Créer mon compte" : "Réinitialiser le mot de passe")}
                 </button>
@@ -204,6 +225,7 @@ export default function Landing() {
             </div>
         </motion.div>
       </div>
+
     </div>
   )
 }
