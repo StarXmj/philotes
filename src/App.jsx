@@ -1,77 +1,68 @@
 // src/App.jsx
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
-import { AuthProvider, useAuth } from './contexts/AuthContext' // <-- Import
-import ProtectedRoute from './components/ProtectedRoute' // <-- Import
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { AuthProvider } from './contexts/AuthContext'
+import { OnboardingProvider } from './contexts/OnboardingContext'
+import ProtectedRoute from './components/ProtectedRoute'
 
-import Profile from './pages/Profile'
-import UpdatePassword from './pages/UpdatePassword'
-import Landing from './pages/Landing'
+// Pages
+import HomePage from './pages/HomePage' // <--- NOUVEL IMPORT
+import Landing from './pages/Landing'   // <--- C'est ton Auth/Login
 import Onboarding from './pages/Onboarding'
 import Dashboard from './pages/Dashboard'
-
+import Profile from './pages/Profile'
+import UpdatePassword from './pages/UpdatePassword'
 import RandomChatMode from './pages/RandomChatMode'
 
-// Petit wrapper pour rediriger automatiquement depuis la Landing si déjà connecté
-const PublicOnlyRoute = ({ children }) => {
-  const { user, loading } = useAuth()
-  if (loading) return null // ou un spinner
-  if (user) return <Navigate to="/app" replace />
-  return children
-}
+const queryClient = new QueryClient()
 
-function App() {
+export default function App() {
   return (
-    <AuthProvider>
-      <Router>
-        <div className="min-h-screen bg-philo-dark text-white font-sans antialiased">
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <Router>
           <Routes>
-            {/* Route Publique (Landing) */}
-            <Route path="/" element={
-              <PublicOnlyRoute>
-                <Landing />
-              </PublicOnlyRoute>
-            } />
+            {/* 1. La Racine devient la page de présentation */}
+            <Route path="/" element={<HomePage />} />
 
-            {/* Route Semi-Privée (Onboarding) : Nécessite Auth, mais pas forcément de profil */}
+            {/* 2. L'ancienne page Landing devient /auth */}
+            <Route path="/auth" element={<Landing />} />
+
+            {/* Redirection de confort : si qqun tape /login, il va sur /auth */}
+            <Route path="/login" element={<Navigate to="/auth" replace />} />
+
+            {/* Le reste ne change pas */}
+            <Route path="/update-password" element={<UpdatePassword />} />
+            
             <Route path="/onboarding" element={
-              <ProtectedRoute requireProfile={false}>
-                <Onboarding />
+              <ProtectedRoute>
+                <OnboardingProvider>
+                  <Onboarding />
+                </OnboardingProvider>
               </ProtectedRoute>
             } />
 
-            {/* Routes Privées (App) : Nécessitent Auth ET Profil complet */}
             <Route path="/app" element={
-              <ProtectedRoute requireProfile={true}>
+              <ProtectedRoute>
                 <Dashboard />
               </ProtectedRoute>
             } />
-            
-            
+
             <Route path="/profile" element={
-              <ProtectedRoute requireProfile={true}>
+              <ProtectedRoute>
                 <Profile />
-              </ProtectedRoute>
-            } />
-            
-            <Route path="/update-password" element={
-              <ProtectedRoute requireProfile={false}>
-                <UpdatePassword />
               </ProtectedRoute>
             } />
 
             <Route path="/random" element={
-    <ProtectedRoute>
-        <RandomChatMode />
-    </ProtectedRoute>
-} />
+              <ProtectedRoute>
+                <RandomChatMode />
+              </ProtectedRoute>
+            } />
 
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </div>
-      </Router>
-    </AuthProvider>
+        </Router>
+      </AuthProvider>
+    </QueryClientProvider>
   )
 }
-
-export default App
