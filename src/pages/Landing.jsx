@@ -22,47 +22,38 @@ export default function Landing() {
   const [msg, setMsg] = useState(null)
   const [allowedDomains, setAllowedDomains] = useState([])
 
-  // --- ÉTAT PWA ---
+  // --- NOUVEAU : Détection PWA ---
+  const [isPWA, setIsPWA] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState(null)
 
   useEffect(() => {
+    // Vérifier si on est en mode App (Standalone)
+    const checkPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    setIsPWA(checkPWA)
+
     if (user) navigate('/app')
   }, [user, navigate])
 
-  // --- LOGIQUE PWA : Capturer l'événement d'installation ---
+  // --- LOGIQUE PWA INSTALLATION (Seulement si pas déjà installé) ---
   useEffect(() => {
     const handler = (e) => {
-      // Empêcher la mini-barre d'info par défaut du navigateur
       e.preventDefault()
-      // Stocker l'événement pour pouvoir le déclencher plus tard via le bouton
       setDeferredPrompt(e)
     }
-
     window.addEventListener('beforeinstallprompt', handler)
-
     return () => window.removeEventListener('beforeinstallprompt', handler)
   }, [])
 
-  // --- FONCTION DÉCLENCHEUR PWA ---
   const handleInstallClick = async () => {
     if (!deferredPrompt) {
-      // Si l'événement n'est pas dispo (ex: iOS ou déjà installé), on guide l'utilisateur
       alert("Pour installer sur iOS : Appuyez sur le bouton Partager (carré avec flèche) puis sur 'Sur l'écran d'accueil'.")
       return
     }
-
-    // Afficher la demande d'installation native
     deferredPrompt.prompt()
-
-    // Attendre la réponse de l'utilisateur
-    const { outcome } = await deferredPrompt.userChoice
-    console.log(`User response to the install prompt: ${outcome}`)
-    
-    // On ne peut utiliser le prompt qu'une seule fois
     setDeferredPrompt(null)
   }
 
-  // ... (Le reste de ton code Auth : fetchDomains, helpers, handleSubmit...)
+  // ... (Fetch Domains & Helpers restent identiques) ...
   useEffect(() => {
     const fetchDomains = async () => {
       try {
@@ -121,12 +112,13 @@ export default function Landing() {
 
   return (
     <div className="min-h-screen bg-philo-dark text-white overflow-hidden relative">
-      
       <div className="absolute top-[-10%] left-[-10%] w-96 h-96 bg-philo-primary/30 rounded-full blur-[100px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-10%] w-96 h-96 bg-philo-secondary/20 rounded-full blur-[100px] pointer-events-none" />
 
-      {/* VERSION MOBILE : BOUTON PWA */}
-      <div className="lg:hidden flex flex-col items-center justify-center min-h-screen p-6 relative z-10">
+      {/* 1. VERSION MOBILE & TABLETTE (< 1024px) -> "TÉLÉCHARGER L'APP"
+          CONDITION : Seulement si on n'est PAS en mode PWA (!isPWA)
+      */}
+      <div className={`${isPWA ? 'hidden' : 'lg:hidden'} flex flex-col items-center justify-center min-h-screen p-6 relative z-10`}>
           <div className="text-center space-y-8 max-w-md mx-auto">
               <h1 className="text-4xl font-bold tracking-tighter">Philotès<span className="text-philo-primary">.</span></h1>
               <div className="relative py-10">
@@ -141,8 +133,6 @@ export default function Landing() {
                   <h2 className="text-3xl font-bold leading-tight">L'expérience Philotès se vit <span className="text-transparent bg-clip-text bg-gradient-to-r from-philo-primary to-purple-400">sur ton mobile.</span></h2>
                   <p className="text-gray-400 text-sm px-4">Pour accéder au chat vidéo, à la constellation 3D et aux rencontres aléatoires, télécharge l'application officielle.</p>
               </div>
-              
-              {/* BOUTON MODIFIÉ POUR PWA */}
               <div className="space-y-3 w-full">
                   <button 
                     onClick={handleInstallClick} 
@@ -159,8 +149,10 @@ export default function Landing() {
           </div>
       </div>
 
-      {/* VERSION ORDI : AUTH CLASSIQUE */}
-      <div className="hidden lg:flex min-h-screen flex-col items-center justify-center relative z-10 px-4">
+      {/* 2. VERSION FORMULAIRE CONNEXION
+          CONDITION : Visible sur Desktop (lg:flex) OU si on est en mode PWA (isPWA)
+      */}
+      <div className={`${isPWA ? 'flex' : 'hidden lg:flex'} min-h-screen flex-col items-center justify-center relative z-10 px-4`}>
         <motion.div layout initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
             <div className="text-center mb-8">
               <h1 className="text-6xl font-bold text-white mb-2 tracking-tight">Philotès<span className="text-philo-primary">.</span></h1>
