@@ -1,3 +1,4 @@
+// vite.config.js
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
@@ -6,15 +7,18 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate', // <--- IMPORTANT : Mise à jour auto
+      registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
       
-      // Configuration pour forcer l'écrasement du cache
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
-        skipWaiting: true // <--- C'est la clé : ne pas attendre la fermeture
+        skipWaiting: true,
+        // --- CORRECTIF ICI ---
+        // On augmente la limite de taille des fichiers mis en cache à 10 Mo (par défaut 2 Mo)
+        // pour accepter tes avatars haute définition.
+        maximumFileSizeToCacheInBytes: 10 * 1024 * 1024 
       },
       
       manifest: {
